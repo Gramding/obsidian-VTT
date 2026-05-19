@@ -32,6 +32,7 @@ interface Token {
   hp?: number;
   maxHp?: number;
   conditions: string[];
+  defeated?: boolean; // greyed out with X, still on board
 }
 
 interface BoardSettings {
@@ -223,7 +224,18 @@ class VTTView extends ItemView {
   private dragToken: Token | null = null;
   private dragOffX  = 0;
   private dragOffY  = 0;
-  private selToken: Token | null = null;
+  // multi-selection
+  private selTokens = new Set<Token>();
+  // drag offsets for each selected token (id -> {dcol, drow})
+  private dragOffsets = new Map<string, {x:number, y:number}>();
+  // measurement tool state
+  private measuring    = false;
+  private measureStart: {x:number,y:number} | null = null;
+  private measureEnd:   {x:number,y:number} | null = null;
+  private measureBtnEl: HTMLElement | null = null;
+  // quick HP edit state
+  private hpEditToken: Token | null = null;
+  private hpEditEl:    HTMLElement | null = null;
 
   // ui
   private ctxMenu:     HTMLElement | null = null;
@@ -385,6 +397,14 @@ class VTTView extends ItemView {
 
     sep();
 
+    const measureBtn = btn("ruler",  "Measure distance (click-drag on board)", () => {
+      this.measuring = !this.measuring;
+      if (!this.measuring) { this.measureStart = null; this.measureEnd = null; }
+      this.measureBtnEl = measureBtn;
+      measureBtn.style.color      = this.measuring ? "var(--interactive-accent)" : "var(--icon-color)";
+      measureBtn.style.background = this.measuring ? "var(--background-modifier-hover)" : "";
+      this.dirty = true;
+    });
     btn("grid",         "Toggle grid overlay",             () => {
       this.board.showGrid = !this.board.showGrid;
       this.plugin.saveVTTSettings();
@@ -399,7 +419,7 @@ class VTTView extends ItemView {
     btn("trash-2",      "Clear all tokens from board",    () => {
       new ConfirmModal(this.app, "Remove all tokens from the board?", () => {
         this.S.tokens = [];
-        this.selToken = null; this.dragToken = null;
+        this.selTokens.clear(); this.dragToken = null;
         this.plugin.saveVTTSettings();
         this.dirty = true;
       }).open();
@@ -520,6 +540,11 @@ class VTTView extends ItemView {
     }
     if (this.dragToken) this.drawToken(this.dragToken);
 
+    // ── Measurement line ──────────────────────────────────────────────────────
+    if (this.measuring && this.measureStart && this.measureEnd) {
+      this.drawMeasurement(this.measureStart, this.measureEnd);
+    }
+
     // ── Align-BG mode overlay info ────────────────────────────────────────
     if (this.mode === "align-bg" && board.backgroundImage) {
       this.drawAlignInfo();
@@ -620,12 +645,12 @@ class VTTView extends ItemView {
     const isHex  = board.gridType !== "square";
     const pointy = board.gridType === "hex-pointy";
     const r      = board.cellSize / 2;
-    const isSel  = this.selToken?.id === token.id;
+    const isSel  = this.selTokens.has(token);
 
     let cx: number, cy: number, tr: number;
     if (isHex) {
-      const c = this.hexCenter(token.col, token.row, r, pointy);
-      cx = c.x; cy = c.y; tr = r * 0.82 * token.size;
+      const cn = this.hexCenter(token.col, token.row, r, pointy);
+      cx = cn.x; cy = cn.y; tr = r * 0.82 * token.size;
     } else {
       cx = token.col * board.cellSize + board.cellSize * token.size / 2;
       cy = token.row * board.cellSize + board.cellSize * token.size / 2;
@@ -634,8 +659,9 @@ class VTTView extends ItemView {
 
     const img = token.portrait ? this.loadImg(token.portrait) : null;
 
-    // clipped body
+    // ── clipped portrait / fill ───────────────────────────────────────────
     ctx.save();
+    ctx.globalAlpha = token.defeated ? 0.45 : 1;
     ctx.beginPath(); ctx.arc(cx, cy, tr, 0, Math.PI * 2); ctx.clip();
     if (img) {
       ctx.drawImage(img, cx - tr, cy - tr, tr * 2, tr * 2);
@@ -651,41 +677,55 @@ class VTTView extends ItemView {
     }
     ctx.restore();
 
-    // border
+    // ── defeated X overlay ────────────────────────────────────────────────
+    if (token.defeated) {
+      ctx.save();
+      ctx.strokeStyle = "#e74c3c";
+      ctx.lineWidth   = 3 / this.zoom;
+      ctx.globalAlpha = 0.9;
+      const d = tr * 0.5;
+      ctx.beginPath(); ctx.moveTo(cx - d, cy - d); ctx.lineTo(cx + d, cy + d); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx + d, cy - d); ctx.lineTo(cx - d, cy + d); ctx.stroke();
+      ctx.restore();
+    }
+
+    // ── border / selection glow ───────────────────────────────────────────
     ctx.save();
     if (isSel) { ctx.shadowColor = token.color; ctx.shadowBlur = 12 / this.zoom; }
     ctx.beginPath(); ctx.arc(cx, cy, tr, 0, Math.PI * 2);
-    ctx.strokeStyle = isSel ? "#ffffff" : token.color;
+    ctx.strokeStyle = token.defeated ? "#555555" : isSel ? "#ffffff" : token.color;
     ctx.lineWidth   = (isSel ? 2.5 : 1.5) / this.zoom;
     ctx.stroke();
     ctx.restore();
 
-    // name label
+    // ── name label ────────────────────────────────────────────────────────
     const fs = Math.max(8, board.cellSize * 0.17);
     ctx.save();
+    ctx.globalAlpha = token.defeated ? 0.55 : 1;
     ctx.font = `${fs}px 'Courier New'`;
     const tw = ctx.measureText(token.name).width;
     const lx = cx - tw / 2 - 3, ly = cy + tr + 2 / this.zoom;
     ctx.fillStyle = "rgba(0,0,0,0.72)";
     ctx.fillRect(lx, ly, tw + 6, fs + 4);
-    ctx.fillStyle = "#e0e8ff";
+    ctx.fillStyle = token.defeated ? "#888" : "#e0e8ff";
     ctx.textAlign = "center"; ctx.textBaseline = "top";
     ctx.fillText(token.name, cx, ly + 2);
     ctx.restore();
 
-    // HP bar
+    // ── HP bar ────────────────────────────────────────────────────────────
     if (token.maxHp !== undefined && token.maxHp > 0) {
       const bw  = tr * 2, bh = Math.max(3, board.cellSize * 0.06);
       const bx  = cx - tr, by = cy + tr + fs + 6 / this.zoom;
       const pct = Math.max(0, Math.min(1, (token.hp ?? token.maxHp) / token.maxHp));
       ctx.save();
+      ctx.globalAlpha = token.defeated ? 0.4 : 1;
       ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(bx, by, bw, bh);
       ctx.fillStyle = pct > 0.5 ? "#2ecc71" : pct > 0.25 ? "#f39c12" : "#e74c3c";
       ctx.fillRect(bx, by, bw * pct, bh);
       ctx.restore();
     }
 
-    // condition pips
+    // ── condition pips ────────────────────────────────────────────────────
     if (token.conditions.length > 0) {
       const pip = Math.max(8, board.cellSize * 0.17), gap = pip * 0.25;
       ctx.save();
@@ -791,27 +831,24 @@ class VTTView extends ItemView {
 
     const ARROW = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
     if (ARROW.includes(e.key)) {
-      if (!this.selToken) return;
+      if (this.selTokens.size === 0) return;
       e.preventDefault();
 
       const { board } = this;
       const isHex  = board.gridType !== "square";
       const pointy = board.gridType === "hex-pointy";
-      const t      = this.selToken;
-
-      if (isHex) {
-        // Hex axial movement — depends on pointy vs flat and odd/even offset row/col
-        const { dc, dr } = this.hexArrowDelta(e.key, t.col, t.row, pointy);
-        t.col = Math.max(0, Math.min(board.cols - t.size, t.col + dc));
-        t.row = Math.max(0, Math.min(board.rows - t.size, t.row + dr));
-      } else {
-        // Square grid: straightforward cardinal movement
-        // Shift moves by token.size so large tokens step by their own footprint
-        const step = e.shiftKey ? t.size : 1;
-        if (e.key === "ArrowUp")    t.row = Math.max(0,                    t.row - step);
-        if (e.key === "ArrowDown")  t.row = Math.min(board.rows - t.size,  t.row + step);
-        if (e.key === "ArrowLeft")  t.col = Math.max(0,                    t.col - step);
-        if (e.key === "ArrowRight") t.col = Math.min(board.cols - t.size,  t.col + step);
+      for (const t of this.selTokens) {
+        if (isHex) {
+          const { dc, dr } = this.hexArrowDelta(e.key, t.col, t.row, pointy);
+          t.col = Math.max(0, Math.min(board.cols - t.size, t.col + dc));
+          t.row = Math.max(0, Math.min(board.rows - t.size, t.row + dr));
+        } else {
+          const step = 1;
+          if (e.key === "ArrowUp")    t.row = Math.max(0,                   t.row - step);
+          if (e.key === "ArrowDown")  t.row = Math.min(board.rows - t.size, t.row + step);
+          if (e.key === "ArrowLeft")  t.col = Math.max(0,                   t.col - step);
+          if (e.key === "ArrowRight") t.col = Math.min(board.cols - t.size, t.col + step);
+        }
       }
 
       this.plugin.saveVTTSettings();
@@ -824,18 +861,20 @@ class VTTView extends ItemView {
       e.preventDefault();
       const tokens = this.S.tokens;
       if (tokens.length === 0) return;
-      const idx = this.selToken ? tokens.indexOf(this.selToken) : -1;
+      const first = this.selTokens.size === 1 ? [...this.selTokens][0] : null;
+      const idx = first ? tokens.indexOf(first) : -1;
       const next = e.shiftKey
         ? (idx - 1 + tokens.length) % tokens.length
         : (idx + 1) % tokens.length;
-      this.selToken = tokens[next];
+      this.selTokens.clear();
+      this.selTokens.add(tokens[next]);
       this.dirty = true;
       return;
     }
 
     // Escape: deselect
     if (e.key === "Escape") {
-      this.selToken = null;
+      this.selTokens.clear();
       this.dirty = true;
     }
   }
@@ -883,7 +922,20 @@ class VTTView extends ItemView {
     // ── Normal mode ───────────────────────────────────────────────────────
     const token = this.tokenAt(w.x, w.y);
 
+    // Measurement mode: left click starts/updates measure line
+    if (this.measuring && button === 0) {
+      this.measureStart = { x: w.x, y: w.y };
+      this.measureEnd   = { x: w.x, y: w.y };
+      this.dirty = true;
+      return;
+    }
+
     if (button === 1 || (button === 0 && !token)) {
+      // Clear selection when clicking empty space (not shift-clicking)
+      if (button === 0 && !token && !(window as any).lastShiftState) {
+        this.selTokens.clear();
+        this.dirty = true;
+      }
       this.isPanning  = true;
       this.panAnchorX = sx - this.panX;
       this.panAnchorY = sy - this.panY;
@@ -892,27 +944,53 @@ class VTTView extends ItemView {
     }
 
     if (button === 0 && token) {
-      this.selToken  = token;
-      this.dragToken = token;
       const { board } = this;
       const isHex  = board.gridType !== "square";
       const pointy = board.gridType === "hex-pointy";
       const r      = board.cellSize / 2;
-      let tcx: number, tcy: number;
-      if (isHex) {
-        const c = this.hexCenter(token.col, token.row, r, pointy);
-        tcx = c.x; tcy = c.y;
-      } else {
-        tcx = token.col * board.cellSize + board.cellSize * token.size / 2;
-        tcy = token.row * board.cellSize + board.cellSize * token.size / 2;
+
+      // Shift-click toggles token in/out of selection without starting a drag
+      const shiftHeld = !!(window as any).lastShiftState;
+      if (shiftHeld) {
+        if (this.selTokens.has(token)) this.selTokens.delete(token);
+        else this.selTokens.add(token);
+        this.dirty = true;
+        return;
       }
-      this.dragOffX = w.x - tcx;
-      this.dragOffY = w.y - tcy;
+
+      // Plain click: if token not already in selection, replace selection
+      if (!this.selTokens.has(token)) {
+        this.selTokens.clear();
+        this.selTokens.add(token);
+      }
+
+      // Record drag offsets for every selected token
+      this.dragToken = token;
+      this.dragOffsets.clear();
+      for (const t of this.selTokens) {
+        let tcx: number, tcy: number;
+        if (isHex) {
+          const cn = this.hexCenter(t.col, t.row, r, pointy);
+          tcx = cn.x; tcy = cn.y;
+        } else {
+          tcx = t.col * board.cellSize + board.cellSize * t.size / 2;
+          tcy = t.row * board.cellSize + board.cellSize * t.size / 2;
+        }
+        this.dragOffsets.set(t.id, { x: w.x - tcx, y: w.y - tcy });
+      }
+      this.dragOffX = this.dragOffsets.get(token.id)!.x;
+      this.dragOffY = this.dragOffsets.get(token.id)!.y;
       this.dirty = true;
     }
   }
 
   onMove(sx: number, sy: number) {
+    if (this.measuring && this.measureStart) {
+      const w = this.screenToWorld(sx, sy);
+      this.measureEnd = { x: w.x, y: w.y };
+      this.dirty = true;
+      return;
+    }
     if (!this.isPanning && !this.dragToken) return;
 
     if (this.mode === "align-bg" && this.isPanning) {
@@ -931,15 +1009,19 @@ class VTTView extends ItemView {
     }
 
     if (this.dragToken) {
-      const w  = this.screenToWorld(sx, sy);
-      const wx = w.x - this.dragOffX;
-      const wy = w.y - this.dragOffY;
-      const { col, row } = this.worldToCell(wx, wy);
-      const { board }    = this;
-      const maxC = Math.max(0, board.cols - this.dragToken.size);
-      const maxR = Math.max(0, board.rows - this.dragToken.size);
-      this.dragToken.col = Math.max(0, Math.min(maxC, col));
-      this.dragToken.row = Math.max(0, Math.min(maxR, row));
+      const w   = this.screenToWorld(sx, sy);
+      const { board } = this;
+      // Move every selected token by computing their individual target cells
+      for (const t of this.selTokens) {
+        const off = this.dragOffsets.get(t.id) ?? { x: this.dragOffX, y: this.dragOffY };
+        const wx  = w.x - off.x;
+        const wy  = w.y - off.y;
+        const { col, row } = this.worldToCell(wx, wy);
+        const maxC = Math.max(0, board.cols - t.size);
+        const maxR = Math.max(0, board.rows - t.size);
+        t.col = Math.max(0, Math.min(maxC, col));
+        t.row = Math.max(0, Math.min(maxR, row));
+      }
       this.dirty = true;
     }
   }
@@ -1004,7 +1086,28 @@ class VTTView extends ItemView {
     if (this.mode === "align-bg") { this.setMode("normal"); return; }
     const w = this.screenToWorld(sx, sy);
     const token = this.tokenAt(w.x, w.y);
-    if (token) this.openTokenEditor(token);
+    if (!token) return;
+    // Check if click is near the HP bar — open quick HP edit, else full editor
+    const { board } = this;
+    const isHex  = board.gridType !== "square";
+    const pointy = board.gridType === "hex-pointy";
+    const r      = board.cellSize / 2;
+    let cy: number, tr: number;
+    if (isHex) {
+      const cn = this.hexCenter(token.col, token.row, r, pointy);
+      cy = cn.y; tr = r * 0.82 * token.size;
+    } else {
+      cy = token.row * board.cellSize + board.cellSize * token.size / 2;
+      tr = board.cellSize * token.size / 2 * 0.88;
+    }
+    const fs   = Math.max(8, board.cellSize * 0.17);
+    const barY = (cy + tr + fs + 6 / this.zoom) * this.zoom + this.panY;
+    const inHpBar = token.maxHp !== undefined && Math.abs(sy - (this.canvas.getBoundingClientRect().top + barY)) < 16;
+    if (inHpBar) {
+      this.openHpEdit(token, sx - this.canvas.getBoundingClientRect().left, sy - this.canvas.getBoundingClientRect().top);
+    } else {
+      this.openTokenEditor(token);
+    }
   }
 
   // ── Context menu ──────────────────────────────────────────────────────────
@@ -1032,9 +1135,13 @@ class VTTView extends ItemView {
     });
     row("Edit token",        () => this.openTokenEditor(token));
     row("Refresh from note", () => this.refreshToken(token));
+    row(token.defeated ? "Restore token" : "Defeat token", () => {
+      token.defeated = !token.defeated;
+      this.plugin.saveVTTSettings(); this.dirty = true;
+    });
     row("Remove",              () => {
       this.S.tokens = this.S.tokens.filter(t => t.id !== token.id);
-      if (this.selToken?.id === token.id) this.selToken = null;
+      this.selTokens.delete(token);
       this.plugin.saveVTTSettings(); this.dirty = true;
     });
     document.body.appendChild(menu);
@@ -1124,6 +1231,223 @@ class VTTView extends ItemView {
     }).open();
   }
 
+  // ── Measurement ───────────────────────────────────────────────────────────
+
+  drawMeasurement(start: {x:number,y:number}, end: {x:number,y:number}) {
+    const { ctx, board } = this;
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    const cells = dist / board.cellSize;
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,200,50,0.9)";
+    ctx.lineWidth   = 2 / this.zoom;
+    ctx.setLineDash([6 / this.zoom, 4 / this.zoom]);
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // endpoint dots
+    [start, end].forEach(pt => {
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, 5 / this.zoom, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,200,50,0.9)";
+      ctx.fill();
+    });
+
+    // distance label
+    const label = `${cells.toFixed(1)} cells`;
+    const mx = (start.x + end.x) / 2;
+    const my = (start.y + end.y) / 2 - 10 / this.zoom;
+    const fs  = Math.max(10, 13 / this.zoom);
+    ctx.font = `bold ${fs}px 'Courier New'`;
+    const tw  = ctx.measureText(label).width;
+    ctx.fillStyle = "rgba(0,0,0,0.7)";
+    ctx.fillRect(mx - tw/2 - 4, my - fs, tw + 8, fs + 6);
+    ctx.fillStyle = "rgba(255,220,80,1)";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, mx, my - fs/2 + 3);
+    ctx.restore();
+  }
+
+  // ── Auto-spread tokens on load ────────────────────────────────────────────
+  // Places tokens in a spiral pattern from center so they don't all pile on (0,0)
+
+  spreadTokens() {
+    const { board, tokens } = this.S;
+    if (tokens.length === 0) return;
+
+    const cx = Math.floor(board.cols / 2);
+    const cy = Math.floor(board.rows / 2);
+    const occupied = new Set<string>();
+    const key = (c: number, r: number) => `${c},${r}`;
+
+    // Spiral out from center, find an unoccupied cell for each token
+    const placed: { token: Token; col: number; row: number }[] = [];
+
+    for (const token of tokens) {
+      let found = false;
+      for (let radius = 0; radius < Math.max(board.cols, board.rows); radius++) {
+        // Walk the perimeter of a square at this radius
+        const positions: [number, number][] = [];
+        for (let d = -radius; d <= radius; d++) {
+          positions.push([cx + d, cy - radius]);
+          positions.push([cx + d, cy + radius]);
+          positions.push([cx - radius, cy + d]);
+          positions.push([cx + radius, cy + d]);
+        }
+        for (const [tc, tr] of positions) {
+          if (tc < 0 || tr < 0 || tc + token.size > board.cols || tr + token.size > board.rows) continue;
+          // Check all cells this token would occupy
+          let clear = true;
+          for (let dc = 0; dc < token.size && clear; dc++) {
+            for (let dr = 0; dr < token.size && clear; dr++) {
+              if (occupied.has(key(tc + dc, tr + dr))) clear = false;
+            }
+          }
+          if (clear) {
+            placed.push({ token, col: tc, row: tr });
+            for (let dc = 0; dc < token.size; dc++) {
+              for (let dr = 0; dr < token.size; dr++) {
+                occupied.add(key(tc + dc, tr + dr));
+              }
+            }
+            found = true; break;
+          }
+        }
+        if (found) break;
+      }
+    }
+
+    for (const { token, col, row } of placed) {
+      token.col = col;
+      token.row = row;
+    }
+  }
+
+  // ── IT sync: update token HP + conditions from tracker store ─────────────
+  // Called on every tracker subscribe event alongside follow-initiative
+
+  syncFromTracker(combatants: any[]) {
+    if (!combatants || !Array.isArray(combatants)) return;
+    let changed = false;
+    for (const c of combatants) {
+      const name = String(c.display ?? c.name ?? "");
+      // Find matching token(s) by name
+      const matches = this.S.tokens.filter(t => {
+        const tn = t.name.toLowerCase();
+        const cn = name.toLowerCase();
+        return tn === cn || tn.startsWith(cn + " ") || cn.startsWith(tn + " ");
+      });
+      for (const token of matches) {
+        // HP sync
+        const newHp = c.currentHP ?? c.hp;
+        if (newHp !== undefined && token.hp !== newHp) {
+          token.hp = newHp;
+          // Mark defeated if HP hits 0
+          const wasDefeated = token.defeated;
+          token.defeated = newHp <= 0;
+          if (token.defeated !== wasDefeated) changed = true;
+          changed = true;
+        }
+        // Conditions sync — IT uses a Set or array of status objects
+        const statuses: string[] = [];
+        const rawStatus = c.status;
+        if (Array.isArray(rawStatus)) {
+          for (const s of rawStatus) {
+            const name = s?.name ?? s?.id ?? (typeof s === "string" ? s : "");
+            if (name) statuses.push(String(name));
+          }
+        } else if (rawStatus instanceof Set) {
+          for (const s of rawStatus) {
+            const name = (s as any)?.name ?? (s as any)?.id ?? String(s);
+            if (name) statuses.push(name);
+          }
+        }
+        const existing = JSON.stringify(token.conditions.sort());
+        const incoming = JSON.stringify(statuses.sort());
+        if (existing !== incoming) {
+          token.conditions = statuses;
+          changed = true;
+        }
+      }
+    }
+    if (changed) {
+      this.plugin.saveVTTSettings();
+      this.dirty = true;
+    }
+  }
+
+  // ── Quick HP edit ─────────────────────────────────────────────────────────
+
+  openHpEdit(token: Token, sx: number, sy: number) {
+    this.closeHpEdit();
+    const wrap = this.wrap.createDiv();
+    wrap.style.cssText = `
+      position:absolute;z-index:100;
+      top:${sy - 20}px;left:${sx - 40}px;
+      background:var(--background-primary);
+      border:1px solid var(--interactive-accent);
+      border-radius:var(--radius-m);padding:6px 8px;
+      display:flex;align-items:center;gap:6px;
+      box-shadow:var(--shadow-l);
+    `;
+    const lbl = wrap.createSpan({ text: token.name });
+    lbl.style.cssText = "font-size:var(--font-ui-smaller);color:var(--text-muted);white-space:nowrap;";
+
+    const input = wrap.createEl("input");
+    input.type = "number";
+    input.value = String(token.hp ?? 0);
+    input.style.cssText = `
+      width:60px;background:var(--background-modifier-form-field);
+      border:1px solid var(--background-modifier-border);
+      border-radius:var(--radius-s);color:var(--text-normal);
+      padding:2px 6px;font-size:var(--font-ui-small);text-align:center;
+    `;
+
+    const maxLbl = wrap.createSpan({ text: `/ ${token.maxHp ?? "?"}` });
+    maxLbl.style.cssText = "font-size:var(--font-ui-smaller);color:var(--text-muted);";
+
+    const apply = () => {
+      const v = parseInt(input.value);
+      if (!isNaN(v)) {
+        token.hp = Math.max(0, v);
+        token.defeated = token.hp <= 0;
+        this.plugin.saveVTTSettings();
+        this.dirty = true;
+      }
+      this.closeHpEdit();
+    };
+    input.onkeydown = e => { if (e.key === "Enter") apply(); if (e.key === "Escape") this.closeHpEdit(); };
+    setTimeout(() => { input.focus(); input.select(); }, 10);
+
+    const okBtn = wrap.createEl("button", { text: "✓" });
+    okBtn.style.cssText = "background:var(--interactive-accent);border:none;border-radius:var(--radius-s);color:#fff;padding:2px 7px;cursor:pointer;";
+    okBtn.onclick = apply;
+
+    this.hpEditToken = token;
+    this.hpEditEl    = wrap;
+
+    // Dismiss on outside click
+    const dismiss = (e: MouseEvent) => {
+      if (!wrap.contains(e.target as Node)) {
+        this.closeHpEdit();
+        document.removeEventListener("mousedown", dismiss, true);
+      }
+    };
+    setTimeout(() => document.addEventListener("mousedown", dismiss, true), 0);
+  }
+
+  closeHpEdit() {
+    this.hpEditEl?.remove();
+    this.hpEditEl    = null;
+    this.hpEditToken = null;
+  }
+
   pickBackground() {
     new ImageSuggestModal(this.app, file => {
       const url = this.app.vault.getResourcePath(file);
@@ -1206,6 +1530,9 @@ class VTTView extends ItemView {
       const arr: any[] | null = Array.isArray(storeValue) ? storeValue : null;
       if (!arr) return;
 
+      // Always sync HP and conditions from tracker state
+      this.syncFromTracker(arr);
+
       const active = arr.find((combatant: any) => combatant.active === true);
       if (!active?.id) return;
 
@@ -1214,7 +1541,6 @@ class VTTView extends ItemView {
 
       const displayName = String(active.display ?? active.name);
 
-      // Rank = position of this combatant among all with the same display name in IT
       const sameName = arr.filter((combatant: any) =>
         (combatant.display ?? combatant.name) === displayName
       );
@@ -1291,7 +1617,8 @@ class VTTView extends ItemView {
 
   focusToken(token: Token) {
     // Select it
-    this.selToken = token;
+    this.selTokens.clear();
+    this.selTokens.add(token);
 
     // Compute token world-centre
     const { board } = this;
@@ -1347,11 +1674,13 @@ class VTTView extends ItemView {
     for (const token of this.S.tokens) {
       if (token.portrait) this.loadImg(token.portrait);
     }
+    // Auto-spread tokens so they don't pile up at (0,0)
+    this.spreadTokens();
     // Fit grid to background image, then reset viewport
     const bg = this.board.backgroundImage;
     const finish = () => {
       this.panX = 0; this.panY = 0; this.zoom = 1;
-      this.selToken  = null;
+      this.selTokens.clear();
       this.dragToken = null;
       this.plugin.saveVTTSettings();
       this.dirty = true;
