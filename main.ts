@@ -9,6 +9,7 @@ import {
   Notice,
   Modal,
   FuzzySuggestModal,
+  setIcon,
 } from "obsidian";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -262,7 +263,7 @@ class VTTView extends ItemView {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.style.cssText =
-      "display:flex;flex-direction:column;height:100%;background:#0d0f14;overflow:hidden;font-family:'Courier New',monospace;";
+      "display:flex;flex-direction:column;height:100%;background:var(--background-primary);overflow:hidden;";
 
     this.buildToolbar(containerEl);
     this.buildAlignHint(containerEl);
@@ -281,73 +282,61 @@ class VTTView extends ItemView {
 
   buildAlignHint(parent: HTMLElement) {
     const hint = parent.createDiv();
-    hint.style.cssText = `
-      display:none;align-items:center;gap:10px;padding:5px 12px;
-      background:#1a0f2e;border-bottom:1px solid #7c3aed;color:#c4b5fd;
-      font-size:11px;flex-shrink:0;
-    `;
-    hint.innerHTML =
-      `<span style="font-size:16px">🎯</span>` +
-      `<span><b>Align BG mode:</b> drag to move image &nbsp;|&nbsp; ` +
-      `scroll to scale image &nbsp;|&nbsp; ` +
-      `<b>Shift+scroll</b> fine-scale &nbsp;|&nbsp; ` +
-      `click <b>Done</b> when aligned</span>`;
+    hint.style.cssText =
+      "display:none;align-items:center;gap:8px;padding:4px 12px;" +
+      "background:var(--background-modifier-hover);border-bottom:1px solid var(--background-modifier-border);" +
+      "color:var(--text-muted);font-size:var(--font-ui-smaller);flex-shrink:0;";
+    const icon = hint.createDiv();
+    setIcon(icon, "crosshair");
+    icon.style.cssText = "display:flex;align-items:center;color:var(--interactive-accent);flex-shrink:0;";
+    hint.createSpan({ text: "Align BG — drag: move image  |  scroll: scale  |  Shift+scroll: fine-scale  |  click Align BG again to exit" });
     this.alignHint = hint;
   }
 
   buildToolbar(parent: HTMLElement) {
     const bar = parent.createDiv();
     bar.style.cssText =
-      "display:flex;align-items:center;gap:6px;padding:5px 10px;" +
-      "background:#131720;border-bottom:1px solid #1e2535;flex-wrap:wrap;flex-shrink:0;";
+      "display:flex;align-items:center;gap:2px;padding:3px 6px;" +
+      "background:var(--titlebar-background);border-bottom:1px solid var(--background-modifier-border);" +
+      "flex-wrap:wrap;flex-shrink:0;";
 
-    const btn = (label: string, icon: string, tip: string, fn: () => void): HTMLElement => {
-      const b = bar.createEl("button");
-      b.innerHTML = `${icon} <span style="font-size:11px">${label}</span>`;
+    // Icon-only button using Obsidian's clickable-icon pattern
+    const btn = (iconId: string, tip: string, fn: () => void): HTMLElement => {
+      const b = bar.createDiv({ cls: "clickable-icon vtt-toolbar-btn" });
+      b.setAttribute("aria-label", tip);
+      b.style.cssText = "display:flex;align-items:center;justify-content:center;padding:4px;border-radius:4px;cursor:pointer;color:var(--icon-color);";
+      setIcon(b, iconId);
       b.title = tip;
-      b.style.cssText =
-        "background:#1e2535;border:1px solid #2a3450;border-radius:4px;color:#a0b4d0;" +
-        "padding:4px 9px;cursor:pointer;font-family:'Courier New',monospace;" +
-        "white-space:nowrap;transition:background .12s,color .12s;";
-      b.onmouseenter = () => { b.style.background = "#2a3450"; b.style.color = "#e0e8ff"; };
-      b.onmouseleave = () => { b.style.background = "#1e2535"; b.style.color = "#a0b4d0"; };
       b.onclick = fn;
       return b;
     };
 
     const sep = () => {
       const d = bar.createDiv();
-      d.style.cssText = "width:1px;height:18px;background:#2a3450;flex-shrink:0;";
+      d.style.cssText = "width:1px;height:16px;background:var(--background-modifier-border);margin:0 3px;flex-shrink:0;";
     };
 
-    // ── Token / background ────────────────────────────────────────────────
-    btn("Add Token", "⊕", "Add a character or monster to the board", () => this.openAddToken());
-    btn("Load Encounter", "📜", "Load encounter from the currently active note", () => {
-      this.plugin.loadEncounterFromActiveNote();
-    });
-    const followBtn = btn("Follow Initiative", "⚔️", "Follow the active combatant in the Initiative Tracker", () => {
-      this.toggleFollow();
-    });
+    // Tokens
+    btn("user-plus",      "Add token",                     () => this.openAddToken());
+    btn("list-plus",      "New encounter note",            () => new EncounterBuilderModal(this.app, this.plugin).open());
+    btn("play",           "Load encounter from active note", () => this.plugin.loadEncounterFromActiveNote());
+    const followBtn = btn("swords", "Follow Initiative Tracker (toggle)", () => this.toggleFollow());
     this.followBtnEl = followBtn;
-    btn("Background", "🖼", "Set map background image", () => this.pickBackground());
-    btn("Clear BG", "✖🖼", "Remove background image", () => {
+
+    sep();
+
+    // Background
+    btn("image",          "Set background map image",      () => this.pickBackground());
+    btn("image-off",      "Clear background image",        () => {
       this.board.backgroundImage = null;
       this.plugin.saveVTTSettings();
       this.dirty = true;
     });
-
-    sep();
-
-    // ── Align BG button ───────────────────────────────────────────────────
-    // Stored so we can toggle its appearance
-    const alignBtn = btn("Align BG", "🎯",
-      "Enter Align-BG mode: drag and scale the background image independently of the grid",
+    const alignBtn = btn("move",  "Align background image (toggle)",
       () => this.toggleAlignMode()
     );
     this.alignBtnEl = alignBtn;
-
-    // Reset BG transform
-    btn("Reset BG", "↺🖼", "Reset background position and scale to default", () => {
+    btn("rotate-ccw",     "Reset background position and scale", () => {
       this.board.bgX = 0; this.board.bgY = 0; this.board.bgScale = 1;
       this.plugin.saveVTTSettings();
       this.dirty = true;
@@ -355,15 +344,16 @@ class VTTView extends ItemView {
 
     sep();
 
-    // ── Grid type ─────────────────────────────────────────────────────────
+    // Grid type select — keep as select, style natively
     const sel = bar.createEl("select");
     sel.style.cssText =
-      "background:#1e2535;border:1px solid #2a3450;border-radius:4px;color:#a0b4d0;" +
-      "padding:4px 7px;cursor:pointer;font-size:12px;font-family:'Courier New',monospace;";
+      "background:var(--background-primary);border:1px solid var(--background-modifier-border);" +
+      "border-radius:var(--radius-s);color:var(--text-normal);padding:3px 6px;cursor:pointer;" +
+      "font-size:var(--font-ui-smaller);height:26px;";
     ([
-      ["square",     "▦ Squares"],
-      ["hex-flat",   "⬡ Hex Flat"],
-      ["hex-pointy", "⬡ Hex Pointy"],
+      ["square",     "Squares"],
+      ["hex-flat",   "Hex Flat"],
+      ["hex-pointy", "Hex Pointy"],
     ] as const).forEach(([v, l]) => {
       const o = sel.createEl("option", { text: l, value: v });
       if (v === this.board.gridType) o.selected = true;
@@ -376,15 +366,16 @@ class VTTView extends ItemView {
 
     sep();
 
-    // ── Cell size ─────────────────────────────────────────────────────────
+    // Cell size slider
     const szW = bar.createDiv();
-    szW.style.cssText = "display:flex;align-items:center;gap:4px;color:#a0b4d0;font-size:11px;";
-    szW.createSpan({ text: "Cell:" });
+    szW.style.cssText = "display:flex;align-items:center;gap:4px;color:var(--text-muted);font-size:var(--font-ui-smaller);";
+    szW.createSpan({ text: "Cell" });
     const szIn = szW.createEl("input", { type: "range" });
     szIn.min = "10"; szIn.max = "200"; szIn.step = "1";
     szIn.value = String(this.board.cellSize);
-    szIn.style.cssText = "width:90px;accent-color:#4a9eff;cursor:pointer;";
+    szIn.style.cssText = "width:80px;accent-color:var(--interactive-accent);cursor:pointer;";
     const szLbl = szW.createSpan({ text: `${this.board.cellSize}px` });
+    szLbl.style.cssText = "min-width:30px;color:var(--text-muted);font-size:var(--font-ui-smaller);";
     szIn.oninput = () => {
       this.board.cellSize = parseInt(szIn.value);
       szLbl.textContent   = `${szIn.value}px`;
@@ -394,18 +385,18 @@ class VTTView extends ItemView {
 
     sep();
 
-    btn("Grid", "👁", "Toggle grid overlay", () => {
+    btn("grid",         "Toggle grid overlay",             () => {
       this.board.showGrid = !this.board.showGrid;
       this.plugin.saveVTTSettings();
       this.dirty = true;
     });
-    btn("Reset View", "⟳", "Reset viewport pan and zoom", () => {
+    btn("focus",        "Reset viewport pan and zoom",     () => {
       this.panX = 0; this.panY = 0; this.zoom = 1; this.dirty = true;
     });
 
     sep();
 
-    btn("Clear Board", "🗑", "Remove all tokens", () => {
+    btn("trash-2",      "Clear all tokens from board",    () => {
       new ConfirmModal(this.app, "Remove all tokens from the board?", () => {
         this.S.tokens = [];
         this.selToken = null; this.dragToken = null;
@@ -437,9 +428,8 @@ class VTTView extends ItemView {
       this.alignHint.style.display = active ? "flex" : "none";
     }
     if (this.alignBtnEl) {
-      this.alignBtnEl.style.background    = active ? "#4a1d96" : "#1e2535";
-      this.alignBtnEl.style.borderColor   = active ? "#7c3aed" : "#2a3450";
-      this.alignBtnEl.style.color         = active ? "#e0e8ff" : "#a0b4d0";
+      this.alignBtnEl.style.color      = active ? "var(--interactive-accent)" : "var(--icon-color)";
+      this.alignBtnEl.style.background = active ? "var(--background-modifier-hover)" : "";
     }
     this.canvas.style.cursor = active ? "move" : "default";
     this.dirty = true;
@@ -511,7 +501,7 @@ class VTTView extends ItemView {
       }
     } else {
       // No background: draw a plain dark rectangle the size of the grid
-      ctx.fillStyle = "#141824";
+      ctx.fillStyle = "#1a1f2e";
       ctx.fillRect(0, 0, board.cols * board.cellSize, board.rows * board.cellSize);
     }
 
@@ -1024,26 +1014,25 @@ class VTTView extends ItemView {
     const menu = document.createElement("div");
     menu.style.cssText =
       `position:fixed;top:${sy}px;left:${sx}px;z-index:9999;` +
-      `background:#131720;border:1px solid #2a3450;border-radius:6px;` +
-      `padding:4px;min-width:170px;box-shadow:0 8px 28px rgba(0,0,0,0.65);` +
-      `font-family:'Courier New',monospace;`;
+      `background:var(--background-primary);border:1px solid var(--background-modifier-border);border-radius:var(--radius-m);` +
+      `padding:var(--size-2-1);min-width:170px;box-shadow:var(--shadow-l);`;
     const row = (label: string, fn: () => void) => {
       const el = document.createElement("div");
       el.textContent = label;
       el.style.cssText =
-        "padding:6px 12px;cursor:pointer;color:#a0b4d0;font-size:12px;border-radius:4px;user-select:none;";
-      el.onmouseenter = () => { el.style.background = "#1e2535"; el.style.color = "#fff"; };
-      el.onmouseleave = () => { el.style.background = ""; el.style.color = "#a0b4d0"; };
+        "padding:6px 10px;cursor:pointer;color:var(--text-normal);font-size:var(--font-ui-small);border-radius:var(--radius-s);user-select:none;";
+      el.onmouseenter = () => { el.style.background = "var(--background-modifier-hover)"; };
+      el.onmouseleave = () => { el.style.background = ""; };
       el.onclick = () => { this.closeCtxMenu(); fn(); };
       menu.appendChild(el);
     };
-    row("📄 Open note",         () => {
+    row("Open note",         () => {
       const f = this.app.vault.getAbstractFileByPath(token.filePath) as TFile | null;
       if (f) this.app.workspace.getLeaf(false).openFile(f);
     });
-    row("✏️ Edit token",        () => this.openTokenEditor(token));
-    row("🔄 Refresh from note", () => this.refreshToken(token));
-    row("✕ Remove",              () => {
+    row("Edit token",        () => this.openTokenEditor(token));
+    row("Refresh from note", () => this.refreshToken(token));
+    row("Remove",              () => {
       this.S.tokens = this.S.tokens.filter(t => t.id !== token.id);
       if (this.selToken?.id === token.id) this.selToken = null;
       this.plugin.saveVTTSettings(); this.dirty = true;
@@ -1138,17 +1127,50 @@ class VTTView extends ItemView {
   pickBackground() {
     new ImageSuggestModal(this.app, file => {
       const url = this.app.vault.getResourcePath(file);
-      // Reset bg transform when a new image is loaded so it starts at origin
       this.board.backgroundImage = url;
       this.board.bgX     = 0;
       this.board.bgY     = 0;
       this.board.bgScale = 1;
       this.imgCache.delete(url);
       this.imgLoading.delete(url);
-      this.plugin.saveVTTSettings();
-      this.dirty = true;
+      this.fitGridToImage(url).then(() => {
+        this.plugin.saveVTTSettings();
+        this.dirty = true;
+      });
       new Notice(`Background: ${file.basename} — use "Align BG" to position it`);
     }).open();
+  }
+
+  /**
+   * Once the image at `url` is loaded, update cols/rows so the grid covers
+   * the full image exactly at the current cellSize.
+   * Uses the cache if already loaded, otherwise loads fresh.
+   */
+  fitGridToImage(url: string): Promise<void> {
+    return new Promise(resolve => {
+      const apply = (img: HTMLImageElement) => {
+        const { cellSize } = this.board;
+        this.board.cols = Math.max(1, Math.round(img.naturalWidth  / cellSize));
+        this.board.rows = Math.max(1, Math.round(img.naturalHeight / cellSize));
+        this.dirty = true;
+        resolve();
+      };
+
+      if (this.imgCache.has(url)) {
+        apply(this.imgCache.get(url)!);
+        return;
+      }
+
+      // Load independently of the render-loop cache so we get dimensions immediately
+      const img = new Image();
+      img.onload = () => {
+        this.imgCache.set(url, img);
+        this.imgLoading.delete(url);
+        apply(img);
+      };
+      img.onerror = () => { this.imgLoading.delete(url); resolve(); };
+      img.src = url;
+    });
   }
 
   // ── Follow-initiative tracking ───────────────────────────────────────────
@@ -1172,9 +1194,8 @@ class VTTView extends ItemView {
     this.lastFollowId   = "";
 
     if (this.followBtnEl) {
-      this.followBtnEl.style.background  = "#14532d";
-      this.followBtnEl.style.borderColor = "#16a34a";
-      this.followBtnEl.style.color       = "#86efac";
+      this.followBtnEl.style.color      = "var(--interactive-accent)";
+      this.followBtnEl.style.background = "var(--background-modifier-hover)";
     }
 
     // Subscribe to the Svelte store.  Called immediately (may be undefined if
@@ -1223,9 +1244,8 @@ class VTTView extends ItemView {
     }
 
     if (this.followBtnEl) {
-      this.followBtnEl.style.background  = "#1e2535";
-      this.followBtnEl.style.borderColor = "#2a3450";
-      this.followBtnEl.style.color       = "#a0b4d0";
+      this.followBtnEl.style.color      = "var(--icon-color)";
+      this.followBtnEl.style.background = "";
     }
   }
 
@@ -1327,12 +1347,20 @@ class VTTView extends ItemView {
     for (const token of this.S.tokens) {
       if (token.portrait) this.loadImg(token.portrait);
     }
-    if (this.board.backgroundImage) this.loadImg(this.board.backgroundImage);
-    // Reset viewport so the full board is visible
-    this.panX = 0; this.panY = 0; this.zoom = 1;
-    this.selToken  = null;
-    this.dragToken = null;
-    this.dirty = true;
+    // Fit grid to background image, then reset viewport
+    const bg = this.board.backgroundImage;
+    const finish = () => {
+      this.panX = 0; this.panY = 0; this.zoom = 1;
+      this.selToken  = null;
+      this.dragToken = null;
+      this.plugin.saveVTTSettings();
+      this.dirty = true;
+    };
+    if (bg) {
+      this.fitGridToImage(bg).then(finish);
+    } else {
+      finish();
+    }
   }
 }
 
@@ -1604,6 +1632,520 @@ class EncounterParser {
   }
 }
 
+
+
+// ─── Bestiary Search Modal ────────────────────────────────────────────────────
+//
+// Searches the fantasy-statblocks plugin bestiary.
+// API: app.plugins.getPlugin("obsidian-5e-statblocks").bestiary
+// The bestiary is a Map<string, Monster> where each Monster has:
+//   name, hp, ac, cr, type, subtype, size, source, ...
+
+interface BestiaryMonster {
+  name:     string;
+  hp?:      number;
+  ac?:      number | { ac: number }[];
+  cr?:      string | number;
+  type?:    string;
+  subtype?: string;
+  size?:    string;
+  source?:  string;
+}
+
+/** Extract a plain AC number from the ac field which can be int or [{ac:N,...}] */
+function resolveAC(ac: BestiaryMonster["ac"]): number | null {
+  if (!ac) return null;
+  if (typeof ac === "number") return ac;
+  if (Array.isArray(ac) && ac.length > 0) {
+    const first = ac[0];
+    if (typeof first === "number") return first;
+    if (typeof first === "object" && "ac" in first) return (first as {ac:number}).ac;
+  }
+  return null;
+}
+
+class BestiarySuggestModal extends FuzzySuggestModal<BestiaryMonster> {
+  private monsters: BestiaryMonster[] = [];
+  private loaded = false;
+
+  constructor(app: App, private onChoose: (m: BestiaryMonster) => void) {
+    super(app);
+    this.setPlaceholder("Loading bestiary...");
+    BestiarySuggestModal.loadBestiary(app).then(monsters => {
+      this.monsters = monsters;
+      this.loaded = true;
+      this.setPlaceholder(
+        monsters.length > 0
+          ? `Search ${monsters.length} creatures...`
+          : "Bestiary empty — is Fantasy Statblocks installed?"
+      );
+      // Trigger a re-render of the suggestion list
+      (this as any).updateSuggestions?.();
+    });
+  }
+
+  static async loadBestiary(app: App): Promise<BestiaryMonster[]> {
+    try {
+      const plugin = (app as any).plugins?.plugins?.["obsidian-5e-statblocks"];
+      if (!plugin?.api) return [];
+      const api = plugin.api;
+      // v4.x: api.getBestiary() returns Promise<Map<string, Monster>>
+      if (typeof api.getBestiary === "function") {
+        const map: Map<string, BestiaryMonster> = await api.getBestiary();
+        if (map instanceof Map) return Array.from(map.values());
+      }
+      // fallback: api.getBestiaryCreatures() may return array directly
+      if (typeof api.getBestiaryCreatures === "function") {
+        const result = await api.getBestiaryCreatures();
+        if (Array.isArray(result)) return result;
+        if (result instanceof Map) return Array.from(result.values());
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  getItems(): BestiaryMonster[] { return this.monsters; }
+
+  getItemText(m: BestiaryMonster): string {
+    // Searched string — include name, type, source so they all match
+    const type   = m.type    ? ` · ${m.type}`   : "";
+    const source = m.source  ? ` (${m.source})`  : "";
+    return `${m.name}${type}${source}`;
+  }
+
+  renderSuggestion(item: { item: BestiaryMonster }, el: HTMLElement) {
+    const m = item.item;
+    el.style.cssText = "display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:4px 8px;";
+
+    const left = el.createDiv();
+    left.style.cssText = "display:flex;flex-direction:column;gap:1px;min-width:0;";
+
+    const name = left.createDiv({ text: m.name });
+    name.style.cssText = "font-size:var(--font-ui-small);color:var(--text-normal);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+
+    const meta: string[] = [];
+    if (m.type)   meta.push(m.type + (m.subtype ? ` (${m.subtype})` : ""));
+    if (m.source) meta.push(m.source);
+    if (meta.length) {
+      const sub = left.createDiv({ text: meta.join(" · ") });
+      sub.style.cssText = "font-size:var(--font-ui-smaller);color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+    }
+
+    const right = el.createDiv();
+    right.style.cssText = "display:flex;gap:6px;flex-shrink:0;align-items:center;";
+
+    const badge = (label: string, val: string | number | null | undefined) => {
+      if (val === null || val === undefined || val === "") return;
+      const b = right.createDiv();
+      b.style.cssText = "font-size:10px;color:var(--text-faint);white-space:nowrap;";
+      b.textContent = `${label} ${val}`;
+    };
+
+    badge("CR",  m.cr);
+    badge("HP",  m.hp);
+    badge("AC",  resolveAC(m.ac));
+  }
+
+  onChooseItem(m: BestiaryMonster): void { this.onChoose(m); }
+}
+
+// ─── Encounter Builder Modal ──────────────────────────────────────────────────
+
+interface BuilderCreature {
+  creature: string;     // bestiary/note name
+  displayName: string;  // shown on token
+  hp: string;
+  ac: string;
+  count: number;
+}
+
+class EncounterBuilderModal extends Modal {
+  private noteName   = "New Encounter";
+  private saveFolder = "";
+  private mapPath    = "";
+  private players:  string[]          = [];
+  private creatures: BuilderCreature[] = [];
+
+  constructor(app: App, private plugin: VTTPlugin) {
+    super(app);
+  }
+
+  onOpen() {
+    this.modalEl.style.cssText = `
+      width: 680px; max-width: 95vw; max-height: 90vh; overflow: hidden;
+    `;
+    this.contentEl.style.cssText = `
+      padding: 0; height: 100%;
+      color: var(--text-normal);
+      overflow-y: auto; max-height: 85vh;
+    `;
+    this.render();
+  }
+
+  onClose() { this.contentEl.empty(); }
+
+  render() {
+    const el = this.contentEl;
+    el.empty();
+
+    // ── Header ──────────────────────────────────────────────────────────────
+    const header = el.createDiv();
+    header.style.cssText =
+      "padding:16px 20px 12px;border-bottom:1px solid var(--background-modifier-border);" +
+      "display:flex;align-items:center;gap:10px;";
+    const iconEl = header.createDiv();
+    iconEl.style.cssText = "display:flex;align-items:center;color:var(--text-accent);";
+    setIcon(iconEl, "swords");
+    const title = header.createEl("h2", { text: "Encounter Builder" });
+    title.style.cssText = "margin:0;font-size:var(--font-ui-large);color:var(--text-normal);";
+
+    const body = el.createDiv();
+    body.style.cssText = "padding:16px 20px;display:flex;flex-direction:column;gap:16px;";
+
+    // ── Note name + folder ───────────────────────────────────────────────────
+    this.section(body, "Note", (s) => {
+      const row = s.createDiv();
+      row.style.cssText = "display: grid; grid-template-columns: 1fr 1fr; gap: 10px;";
+
+      this.field(row, "File name", this.noteName, (v) => { this.noteName = v; }, "e.g. Goblin Ambush");
+      this.field(row, "Folder (optional)", this.saveFolder, (v) => { this.saveFolder = v; }, "e.g. Sessions/Combat");
+    });
+
+    // ── Map ──────────────────────────────────────────────────────────────────
+    this.section(body, "Map Image", (s) => {
+      const row = s.createDiv();
+      row.style.cssText = "display: flex; gap: 8px; align-items: center;";
+
+      const input = this.styledInput(row, this.mapPath, "[[dungeon.jpg]] or leave empty");
+      input.style.flex = "1";
+      input.oninput = () => { this.mapPath = input.value; };
+
+      const pick = this.actionBtn(row, "Browse");
+      pick.onclick = () => {
+        new ImageSuggestModal(this.app, (file) => {
+          this.mapPath = `[[${file.name}]]`;
+          input.value  = this.mapPath;
+        }).open();
+      };
+    });
+
+    // ── Players ──────────────────────────────────────────────────────────────
+    this.section(body, "Players", (s) => {
+      const list = s.createDiv();
+      list.style.cssText = "display: flex; flex-direction: column; gap: 6px;";
+
+      const renderPlayers = () => {
+        list.empty();
+        this.players.forEach((p, i) => {
+          const row = list.createDiv();
+          row.style.cssText = "display: flex; gap: 6px; align-items: center;";
+          const inp = this.styledInput(row, p, "Player note name");
+          inp.style.flex = "1";
+          inp.oninput = () => { this.players[i] = inp.value; };
+          const browse = this.actionBtn(row, "Browse");
+          browse.onclick = () => {
+            new NoteSuggestModal(this.app, (file) => {
+              this.players[i] = `[[${file.basename}]]`;
+              inp.value = this.players[i];
+            }).open();
+          };
+          const del = this.deleteBtn(row);
+          del.onclick = () => { this.players.splice(i, 1); renderPlayers(); };
+        });
+
+        const addRow = list.createDiv();
+        addRow.style.cssText = "margin-top: 2px;";
+        const addBtn = this.addBtn(addRow, "+ Add Player");
+        addBtn.onclick = () => { this.players.push(""); renderPlayers(); };
+      };
+
+      renderPlayers();
+    });
+
+    // ── Creatures ────────────────────────────────────────────────────────────
+    this.section(body, "Creatures", (s) => {
+      // Column headers
+      const headers = s.createDiv();
+      headers.style.cssText =
+        "display:grid;grid-template-columns:2fr 2fr 60px 60px 52px 32px;" +
+        "gap:6px;padding:0 0 4px;" +
+        "font-size:var(--font-ui-smaller);color:var(--text-faint);letter-spacing:0.08em;text-transform:uppercase;";
+      ["Creature / Note", "Display Name", "HP", "AC", "Count", ""].forEach(h => {
+        headers.createSpan({ text: h });
+      });
+
+      const list = s.createDiv();
+      list.style.cssText = "display: flex; flex-direction: column; gap: 6px;";
+
+      const renderCreatures = () => {
+        list.empty();
+        this.creatures.forEach((cr, i) => {
+          const row = list.createDiv();
+          row.style.cssText =
+            "display:grid;grid-template-columns:2fr 2fr 60px 60px 52px 32px;" +
+            "gap:6px;align-items:center;" +
+            "background:var(--background-modifier-hover);border:1px solid var(--background-modifier-border);" +
+            "border-radius:var(--radius-m);padding:8px;";
+
+          // Creature name input + browse
+          const creatureWrap = row.createDiv();
+          creatureWrap.style.cssText = "display: flex; gap: 4px; align-items: center;";
+          const creatureIn = this.styledInput(creatureWrap, cr.creature, "Goblin");
+          creatureIn.style.flex = "1"; creatureIn.style.minWidth = "0";
+          creatureIn.oninput = () => {
+            cr.creature = creatureIn.value;
+            if (!cr.displayName) displayIn.placeholder = creatureIn.value || "Display name";
+          };
+          // Browse button: use bestiary if available, fall back to vault notes
+          const browse = this.actionBtn(creatureWrap, "…");
+          browse.title = "Search bestiary";
+          browse.style.cssText += "padding:3px 7px;flex-shrink:0;";
+          browse.onclick = () => {
+            new BestiarySuggestModal(this.app, (monster) => {
+              cr.creature      = monster.name;
+              creatureIn.value = monster.name;
+              if (!cr.hp && monster.hp !== undefined) {
+                cr.hp = String(monster.hp); hpIn.value = cr.hp;
+              }
+              const ac = resolveAC(monster.ac);
+              if (!cr.ac && ac !== null) {
+                cr.ac = String(ac); acIn.value = cr.ac;
+              }
+              if (!cr.displayName) displayIn.placeholder = monster.name;
+            }).open();
+          };
+
+          // Display name
+          const displayIn = this.styledInput(row, cr.displayName, cr.creature || "Display name");
+          displayIn.oninput = () => { cr.displayName = displayIn.value; };
+
+          // HP
+          const hpIn = this.styledInput(row, cr.hp, "—");
+          hpIn.type = "number"; hpIn.style.textAlign = "center";
+          hpIn.oninput = () => { cr.hp = hpIn.value; };
+
+          // AC
+          const acIn = this.styledInput(row, cr.ac, "—");
+          acIn.type = "number"; acIn.style.textAlign = "center";
+          acIn.oninput = () => { cr.ac = acIn.value; };
+
+          // Count
+          const countIn = this.styledInput(row, String(cr.count), "1");
+          countIn.type = "number"; countIn.style.textAlign = "center";
+          countIn.oninput = () => { cr.count = Math.max(1, parseInt(countIn.value) || 1); };
+
+          // Delete
+          const del = this.deleteBtn(row);
+          del.onclick = () => { this.creatures.splice(i, 1); renderCreatures(); };
+        });
+
+        const addRow = list.createDiv();
+        addRow.style.cssText = "margin-top: 2px;";
+        const addBtn = this.addBtn(addRow, "+ Add Creature");
+        addBtn.onclick = () => {
+          this.creatures.push({ creature: "", displayName: "", hp: "", ac: "", count: 1 });
+          renderCreatures();
+          // Focus the new creature name input
+          setTimeout(() => {
+            const inputs = list.querySelectorAll("input");
+            const last = inputs[inputs.length - 5] as HTMLInputElement;
+            last?.focus();
+          }, 10);
+        };
+      };
+
+      renderCreatures();
+    });
+
+    // ── Preview ───────────────────────────────────────────────────────────────
+    this.section(body, "Preview", (s) => {
+      const pre = s.createEl("pre");
+      pre.style.cssText =
+        "background:var(--code-background);border:1px solid var(--background-modifier-border);" +
+        "border-radius:var(--radius-m);padding:12px;font-size:var(--font-ui-smaller);" +
+        "color:var(--code-normal);overflow-x:auto;margin:0;line-height:1.6;white-space:pre;";
+      const update = () => { pre.textContent = this.buildMarkdown(); };
+      update();
+      // Refresh preview on any input change in the body
+      body.addEventListener("input", update);
+      body.addEventListener("click", () => setTimeout(update, 50));
+    });
+
+    // ── Footer / Save ─────────────────────────────────────────────────────────
+    const footer = el.createDiv();
+    footer.style.cssText =
+      "padding:12px 20px;border-top:1px solid var(--background-modifier-border);" +
+      "display:flex;justify-content:flex-end;gap:8px;" +
+      "background:var(--background-primary);position:sticky;bottom:0;";
+
+    const cancel = footer.createEl("button", { text: "Cancel" });
+    cancel.addClass("mod-muted");
+    cancel.onclick = () => this.close();
+
+    const save = footer.createEl("button", { text: "Save Encounter Note" });
+    save.addClass("mod-cta");
+    save.onclick = () => this.save();
+  }
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
+
+  private section(parent: HTMLElement, title: string, fn: (s: HTMLElement) => void) {
+    const wrap = parent.createDiv();
+    wrap.style.cssText = "display:flex;flex-direction:column;gap:8px;";
+    const lbl = wrap.createDiv({ text: title });
+    lbl.style.cssText =
+      "font-size:var(--font-ui-smaller);letter-spacing:0.08em;text-transform:uppercase;" +
+      "color:var(--text-faint);border-bottom:1px solid var(--background-modifier-border);padding-bottom:5px;";
+    fn(wrap);
+  }
+
+  private field(parent: HTMLElement, label: string, value: string, onChange: (v: string) => void, placeholder = "") {
+    const wrap = parent.createDiv();
+    wrap.style.cssText = "display: flex; flex-direction: column; gap: 4px;";
+    const lbl = wrap.createEl("label", { text: label });
+    lbl.style.cssText = "font-size:var(--font-ui-smaller);color:var(--text-muted);margin-bottom:2px;";
+    const inp = this.styledInput(wrap, value, placeholder);
+    inp.oninput = () => onChange(inp.value);
+    return inp;
+  }
+
+  private styledInput(parent: HTMLElement, value: string, placeholder = ""): HTMLInputElement {
+    const el = parent.createEl("input");
+    el.value = value;
+    el.placeholder = placeholder;
+    el.addClass("vtt-input");
+    el.style.cssText =
+      "background:var(--background-modifier-form-field);border:1px solid var(--background-modifier-border);" +
+      "border-radius:var(--radius-s);color:var(--text-normal);padding:4px 8px;" +
+      "font-size:var(--font-ui-small);outline:none;width:100%;box-sizing:border-box;";
+    el.onfocus = () => { el.style.borderColor = "var(--interactive-accent)"; };
+    el.onblur  = () => { el.style.borderColor = "var(--background-modifier-border)"; };
+    return el;
+  }
+
+  private actionBtn(parent: HTMLElement, label: string): HTMLButtonElement {
+    const b = parent.createEl("button", { text: label });
+    b.style.cssText =
+      "background:var(--background-modifier-hover);border:1px solid var(--background-modifier-border);" +
+      "border-radius:var(--radius-s);color:var(--text-muted);padding:4px 9px;cursor:pointer;" +
+      "font-size:var(--font-ui-smaller);white-space:nowrap;";
+    b.onmouseenter = () => { b.style.color = "var(--text-normal)"; };
+    b.onmouseleave = () => { b.style.color = "var(--text-muted)"; };
+    return b as HTMLButtonElement;
+  }
+
+  private addBtn(parent: HTMLElement, label: string): HTMLButtonElement {
+    const b = parent.createEl("button", { text: label });
+    b.style.cssText =
+      "background:transparent;border:1px dashed var(--background-modifier-border);" +
+      "border-radius:var(--radius-s);color:var(--text-faint);padding:5px 12px;" +
+      "cursor:pointer;width:100%;font-size:var(--font-ui-smaller);";
+    b.onmouseenter = () => { b.style.borderColor = "var(--interactive-accent)"; b.style.color = "var(--interactive-accent)"; };
+    b.onmouseleave = () => { b.style.borderColor = "var(--background-modifier-border)"; b.style.color = "var(--text-faint)"; };
+    return b as HTMLButtonElement;
+  }
+
+  private deleteBtn(parent: HTMLElement): HTMLButtonElement {
+    const b = parent.createDiv({ cls: "clickable-icon" }) as unknown as HTMLButtonElement;
+    b.style.cssText = "display:flex;align-items:center;justify-content:center;cursor:pointer;padding:4px;border-radius:var(--radius-s);color:var(--text-faint);flex-shrink:0;";
+    setIcon(b as unknown as HTMLElement, "x");
+    b.onmouseenter = () => { (b as unknown as HTMLElement).style.color = "var(--text-error)"; };
+    b.onmouseleave = () => { (b as unknown as HTMLElement).style.color = "var(--text-faint)"; };
+    return b;
+  }
+
+  // ── Markdown generation ───────────────────────────────────────────────────
+
+  buildMarkdown(): string {
+    const lines: string[] = ["---"];
+
+    if (this.mapPath.trim()) {
+      lines.push(`map: "${this.mapPath.trim()}"`);
+    }
+
+    if (this.players.length > 0) {
+      const valid = this.players.filter(p => p.trim());
+      if (valid.length > 0) {
+        lines.push("players:");
+        valid.forEach(p => lines.push(`  - "${p.trim()}"`));
+      }
+    }
+
+    lines.push("---", "");
+    lines.push(`# ${this.noteName || "New Encounter"}`, "");
+
+    // Encounter block
+    if (this.creatures.length > 0) {
+      lines.push("```encounter");
+      lines.push(`name: ${this.noteName || "Encounter"}`);
+      lines.push("creatures:");
+      this.creatures.forEach(cr => {
+        if (!cr.creature.trim()) return;
+        const name    = cr.creature.trim();
+        const display = cr.displayName.trim();
+        const hp      = cr.hp.trim();
+        const ac      = cr.ac.trim();
+        const count   = cr.count || 1;
+
+        if (display && display !== name) {
+          // Object form for renamed creatures
+          for (let i = 0; i < count; i++) {
+            const dname = count > 1 ? `${display} ${i + 1}` : display;
+            lines.push(`  - creature: ${name}`);
+            lines.push(`    name: ${dname}`);
+            if (hp) lines.push(`    hp: ${hp}`);
+            if (ac) lines.push(`    ac: ${ac}`);
+          }
+        } else {
+          // Simple form
+          const stats = [hp || "", ac || ""].filter(Boolean);
+          const statStr = stats.length > 0 ? `, ${stats.join(", ")}` : "";
+          lines.push(`  - ${count > 1 ? count + ": " : ""}${name}${statStr}`);
+        }
+      });
+      lines.push("```");
+    }
+
+    return lines.join("\n");
+  }
+
+  // ── Save ──────────────────────────────────────────────────────────────────
+
+  async save() {
+    const name = this.noteName.trim() || "New Encounter";
+    const folder = this.saveFolder.trim();
+    const filename = name.endsWith(".md") ? name : `${name}.md`;
+    const path = folder ? `${folder}/${filename}` : filename;
+
+    const content = this.buildMarkdown();
+
+    try {
+      // Create folder if needed
+      if (folder) {
+        const folderExists = this.app.vault.getAbstractFileByPath(folder);
+        if (!folderExists) await this.app.vault.createFolder(folder);
+      }
+
+      // Create or overwrite
+      const existing = this.app.vault.getAbstractFileByPath(path);
+      if (existing instanceof TFile) {
+        await this.app.vault.modify(existing, content);
+        new Notice(`Updated: ${path}`);
+      } else {
+        const file = await this.app.vault.create(path, content);
+        new Notice(`Created: ${path}`);
+        // Open the new note
+        await this.app.workspace.getLeaf(false).openFile(file);
+      }
+      this.close();
+    } catch (e) {
+      new Notice(`Error saving: ${e}`);
+    }
+  }
+}
+
 // ─── Settings tab ─────────────────────────────────────────────────────────────
 
 class VTTSettingTab extends PluginSettingTab {
@@ -1661,7 +2203,8 @@ export default class VTTPlugin extends Plugin {
     this.registerView(VTT_VIEW_TYPE, leaf => new VTTView(leaf, this));
     this.addRibbonIcon("layout-grid", "Open VTT Board", () => this.activateView());
     this.addCommand({ id: "open-vtt-board",       name: "Open VTT Board",                callback: () => this.activateView() });
-    this.addCommand({ id: "load-encounter-note",  name: "VTT: Load encounter from active note", callback: () => this.loadEncounterFromActiveNote() });
+    this.addCommand({ id: "load-encounter-note",    name: "VTT: Load encounter from active note",  callback: () => this.loadEncounterFromActiveNote() });
+    this.addCommand({ id: "open-encounter-builder", name: "VTT: Open encounter builder",           callback: () => new EncounterBuilderModal(this.app, this).open() });
     this.addSettingTab(new VTTSettingTab(this.app, this));
   }
 
@@ -1698,7 +2241,7 @@ export default class VTTPlugin extends Plugin {
         tokens.push(tok);
       } else {
         // No note found — create a simple named token
-        tokens.push(this.buildAnonymousToken(playerName, "character", null, null));
+        tokens.push(await this.buildAnonymousToken(playerName, "character", null, null));
       }
     }
 
@@ -1720,7 +2263,7 @@ export default class VTTPlugin extends Plugin {
           tokens.push(tok);
         } else {
           // No note — anonymous monster token with encounter stats
-          tokens.push(this.buildAnonymousToken(displayName, "monster", c.hp, c.ac));
+          tokens.push(await this.buildAnonymousToken(displayName, "monster", c.hp, c.ac));
         }
       }
     }
@@ -1733,7 +2276,104 @@ export default class VTTPlugin extends Plugin {
     const view = this.app.workspace.getLeavesOfType(VTT_VIEW_TYPE)[0]?.view as VTTView | undefined;
     if (view) view.onEncounterLoaded();
 
+    // Load monsters into the initiative tracker (players are auto-managed by IT)
+    await this.loadMonstersIntoTracker(parsed.creatures);
+
     new Notice(`Loaded encounter from "${file.basename}": ${tokens.length} token(s)`);
+  }
+
+  /**
+   * Push the encounter's monsters into the Initiative Tracker.
+   * Players are left untouched — IT manages them from its own settings.
+   * Strategy: read current tracker state, drop all non-player combatants,
+   * append new monsters, write back via tracker.set().
+   */
+  private async loadMonstersIntoTracker(creatures: EncounterCreature[]) {
+    try {
+      const it = (this.app as any).plugins?.plugins?.["initiative-tracker"];
+      if (!it?.tracker?.new) return;
+
+      // Reset encounter and load default party players
+      it.tracker.new(it, { creatures: [] });
+
+      if (creatures.length === 0) return;
+
+      // Grab the Combatant class from an existing combatant (the player IT just loaded)
+      // so we can construct proper instances that have toJSON etc.
+      let current: any[] = [];
+      it.tracker.subscribe((s: any) => { if (Array.isArray(s)) current = s; })();
+      const CombatantClass = current[0]?.constructor;
+      if (!CombatantClass) {
+        new Notice("VTT: could not get Combatant class from initiative tracker");
+        return;
+      }
+
+      // Build proper Combatant instances
+      const monsters: any[] = [];
+      for (const c of creatures) {
+        for (let i = 0; i < c.count; i++) {
+          const displayName = c.count > 1 ? `${c.name} ${i + 1}` : c.name;
+          const bestiary    = await this.getBestiaryCreature(c.creature);
+          const hp  = c.hp  ?? bestiary?.hp  ?? 0;
+          const ac  = c.ac  ?? (bestiary ? resolveAC(bestiary.ac) ?? 0 : 0);
+          const mod = c.mod ?? (bestiary ? (bestiary as any).modifier ?? 0 : 0);
+
+          monsters.push(new CombatantClass({
+            name:     displayName,
+            hp:       hp,
+            ac:       ac,
+            modifier: mod,
+            player:   false,
+            friendly: false,
+            hidden:   false,
+            cr:       bestiary ? (bestiary as any).cr ?? "" : "",
+          }));
+        }
+      }
+
+      // Add monsters and roll initiatives
+      await it.tracker.add(it, false, ...monsters);
+      it.tracker.roll(it);
+
+      // Open the tracker view
+      if (typeof it.addTrackerView === "function") await it.addTrackerView();
+
+    } catch (e) {
+      console.warn("VTT: could not load into initiative tracker:", e);
+      new Notice("VTT: failed to load initiative tracker — see console");
+    }
+  }
+
+  /** Fetch a single creature from the fantasy-statblocks bestiary by name. */
+  private async getBestiaryCreature(name: string): Promise<BestiaryMonster | null> {
+    try {
+      const plugin = (this.app as any).plugins?.plugins?.["obsidian-5e-statblocks"];
+      if (!plugin?.api) return null;
+      // getCreatureFromBestiary is synchronous in most versions
+      if (typeof plugin.api.getCreatureFromBestiary === "function") {
+        const c = plugin.api.getCreatureFromBestiary(name);
+        if (c) return c;
+      }
+      // fallback: getCreature
+      if (typeof plugin.api.getCreature === "function") {
+        const c = await plugin.api.getCreature(name);
+        if (c) return c;
+      }
+    } catch { /* ignore */ }
+    return null;
+  }
+
+  /** Convert a D&D size string to a token grid-cell footprint. */
+  private sizeFromString(size: string | undefined): number {
+    switch (size?.toLowerCase().trim()) {
+      case "tiny":        return 1; // tiny fits in 1 cell visually
+      case "small":       return 1;
+      case "medium":      return 1;
+      case "large":       return 2;
+      case "huge":        return 3;
+      case "gargantuan":  return 4;
+      default:            return 1;
+    }
   }
 
   /** Build a Token from a vault note file, using its frontmatter. */
@@ -1744,13 +2384,21 @@ export default class VTTPlugin extends Plugin {
     const hp    = fm.hp    !== undefined ? Number(fm.hp)    : undefined;
     const maxHp = fm.maxHp !== undefined ? Number(fm.maxHp)
                 : fm["max-hp"] !== undefined ? Number(fm["max-hp"]) : hp;
+
+    // Size: prefer frontmatter, then bestiary lookup
+    let size = fm.size ? Math.max(1, Number(fm.size) || 1) : 0;
+    if (!size) {
+      const bestiary = await this.getBestiaryCreature(file.basename);
+      size = bestiary?.size ? this.sizeFromString(bestiary.size) : 1;
+    }
+
     return {
       id:         `tok_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       filePath:   file.path,
       name:       String(fm.name ?? file.basename),
       portrait,
       col: 0, row: 0,
-      size:       Math.max(1, Number(fm.size) || 1),
+      size,
       type:       fm.type === "monster" ? "monster" : fm.type === "character" ? "character" : defaultType,
       color:      String(fm.color ?? nextColor()),
       hp, maxHp,
@@ -1759,14 +2407,17 @@ export default class VTTPlugin extends Plugin {
   }
 
   /** Build a token with no linked note (anonymous creature from encounter block). */
-  private buildAnonymousToken(name: string, type: Token["type"], hp: number | null, ac: number | null): Token {
+  private async buildAnonymousToken(name: string, type: Token["type"], hp: number | null, ac: number | null): Promise<Token> {
+    // Look up size from the bestiary using the creature name
+    const bestiary = await this.getBestiaryCreature(name);
+    const size = bestiary?.size ? this.sizeFromString(bestiary.size) : 1;
     return {
       id:         `tok_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       filePath:   "",
       name,
       portrait:   null,
       col: 0, row: 0,
-      size:       1,
+      size,
       type,
       color:      nextColor(),
       hp:         hp ?? undefined,
