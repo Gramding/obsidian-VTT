@@ -59,9 +59,15 @@ interface BoardSettings {
   gridOpacity: number;
 }
 
-interface VTTSettings {
+interface BoardState {
+  name: string;
   board: BoardSettings;
   tokens: Token[];
+}
+
+interface VTTSettings {
+  boards: BoardState[];
+  activeBoardIndex: number;
 }
 
 const DEFAULT_BOARD: BoardSettings = {
@@ -78,9 +84,13 @@ const DEFAULT_BOARD: BoardSettings = {
   gridOpacity: 0.3,
 };
 
+function makeBoard(name: string): BoardState {
+  return { name, board: { ...DEFAULT_BOARD }, tokens: [] };
+}
+
 const DEFAULT_SETTINGS: VTTSettings = {
-  board: { ...DEFAULT_BOARD },
-  tokens: [],
+  boards: [makeBoard("Board 1")],
+  activeBoardIndex: 0,
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -187,14 +197,51 @@ class TokenDetailModal extends Modal {
   onClose() { this.contentEl.empty(); }
 }
 
+
+// ─── Board Suggest Modal ──────────────────────────────────────────────────────
+
+class BoardSuggestModal extends FuzzySuggestModal<BoardState> {
+  constructor(
+    app: App,
+    private boards: BoardState[],
+    private onChoose: (board: BoardState, index: number) => void,
+  ) {
+    super(app);
+    this.setPlaceholder("Switch board...");
+  }
+  getItems() { return this.boards; }
+  getItemText(b: BoardState) { return b.name; }
+  renderSuggestion(item: {item: BoardState; match: any}, el: HTMLElement) {
+    el.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 8px;";
+    const left = el.createDiv();
+    left.style.cssText = "display:flex;align-items:center;gap:8px;min-width:0;";
+    const iconWrap = left.createDiv();
+    iconWrap.style.cssText = "display:flex;align-items:center;color:var(--text-accent);flex-shrink:0;";
+    setIcon(iconWrap, "layout-grid");
+    const name = left.createDiv({ text: item.item.name });
+    name.style.cssText = "color:var(--text-normal);font-size:var(--font-ui-small);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    const count = el.createDiv({ text: `${item.item.tokens.length} tokens` });
+    count.style.cssText = "font-size:var(--font-ui-smaller);color:var(--text-faint);flex-shrink:0;";
+  }
+  onChooseItem(b: BoardState) {
+    const idx = this.boards.indexOf(b);
+    this.onChoose(b, idx);
+  }
+}
+
 // ─── VTT View ─────────────────────────────────────────────────────────────────
 
 type InteractMode = "normal" | "align-bg";
 
 class VTTView extends ItemView {
   private plugin: VTTPlugin;
-  private get S()     { return this.plugin.vttSettings; }
-  private get board() { return this.plugin.vttSettings.board; }
+  private get vts()   { return this.plugin.vttSettings; }
+  // Active board state — all token/board access goes through here
+  private get S()     { return this.vts.boards[this.vts.activeBoardIndex] ?? this.vts.boards[0]; }
+  private get board() { return this.S.board; }
+
+  // board switcher button
+  private boardBtn: HTMLElement | null = null;
 
   private canvas!: HTMLCanvasElement;
   private ctx!:    CanvasRenderingContext2D;
@@ -262,7 +309,14 @@ class VTTView extends ItemView {
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
-  async onOpen()  { this.buildUI(); this.startLoop(); }
+  async onOpen()  {
+    this.buildUI();
+    this.startLoop();
+    // Re-fit grid to background on open in case cols/rows are stale from a different session
+    if (this.board.backgroundImage) {
+      this.fitGridToImage(this.board.backgroundImage);
+    }
+  }
   async onClose() {
     if (this.animId !== null) { cancelAnimationFrame(this.animId); this.animId = null; }
     this.stopFollow();
@@ -328,7 +382,63 @@ class VTTView extends ItemView {
       d.style.cssText = "width:1px;height:16px;background:var(--background-modifier-border);margin:0 3px;flex-shrink:0;";
     };
 
-    // Tokens
+    // ── Board switcher ────────────────────────────────────────────────────
+    const boardBtn = bar.createEl("button");
+    boardBtn.style.cssText =
+      "display:flex;align-items:center;gap:5px;max-width:160px;min-width:80px;" +
+      "background:var(--background-primary);border:1px solid var(--background-modifier-border);" +
+      "border-radius:var(--radius-s);color:var(--text-normal);padding:3px 8px;cursor:pointer;" +
+      "font-size:var(--font-ui-smaller);height:26px;overflow:hidden;";
+    const boardBtnIcon = boardBtn.createSpan();
+    boardBtnIcon.style.cssText = "display:flex;align-items:center;flex-shrink:0;";
+    setIcon(boardBtnIcon, "layout-grid");
+    const boardBtnLabel = boardBtn.createSpan({ text: this.S.name });
+    boardBtnLabel.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    boardBtn.title = "Switch board (click to search)";
+    boardBtn.onmouseenter = () => { boardBtn.style.borderColor = "var(--interactive-accent)"; };
+    boardBtn.onmouseleave = () => { boardBtn.style.borderColor = "var(--background-modifier-border)"; };
+    boardBtn.onclick = () => {
+      new BoardSuggestModal(this.app, this.vts.boards, async (_board, idx) => {
+        this.vts.activeBoardIndex = idx;
+        this.plugin.saveVTTSettings();
+        this.resetViewport();
+        this.rebuildBoardSel();
+        this.dirty = true;
+        await this.plugin.loadITForBoard(this.vts.boards[idx].name);
+      }).open();
+    };
+    this.boardBtn = boardBtn;
+    btn("plus",    "New board",            () => {
+      const name = `Board ${this.vts.boards.length + 1}`;
+      this.vts.boards.push(makeBoard(name));
+      this.vts.activeBoardIndex = this.vts.boards.length - 1;
+      this.plugin.saveVTTSettings();
+      this.rebuildBoardSel();
+      this.resetViewport();
+      this.dirty = true;
+    });
+    btn("pencil",  "Rename current board", () => {
+      new RenameBoardModal(this.app, this.S.name, (name) => {
+        this.S.name = name;
+        this.plugin.saveVTTSettings();
+        this.rebuildBoardSel();
+      }).open();
+    });
+    btn("x",       "Delete current board", () => {
+      if (this.vts.boards.length <= 1) { new Notice("Cannot delete the only board."); return; }
+      new ConfirmModal(this.app, `Delete board "${this.S.name}"?`, () => {
+        this.vts.boards.splice(this.vts.activeBoardIndex, 1);
+        this.vts.activeBoardIndex = Math.min(this.vts.activeBoardIndex, this.vts.boards.length - 1);
+        this.plugin.saveVTTSettings();
+        this.rebuildBoardSel();
+        this.selTokens.clear(); this.dragToken = null;
+        this.resetViewport(); this.dirty = true;
+      }).open();
+    });
+
+    sep();
+
+    // ── Tokens ────────────────────────────────────────────────────────────
     btn("user-plus",      "Add token",                     () => this.openAddToken());
     btn("list-plus",      "New encounter note",            () => new EncounterBuilderModal(this.app, this.plugin).open());
     btn("play",           "Load encounter from active note", () => this.plugin.loadEncounterFromActiveNote());
@@ -743,14 +853,35 @@ class VTTView extends ItemView {
 
   // ── Image loading ─────────────────────────────────────────────────────────
 
+  /**
+   * Resolve a stored path (vault-relative like "maps/dungeon.png") to a
+   * live resource URL. Also handles old saves that stored app:// URLs.
+   */
+  resolveImageUrl(path: string): string | null {
+    if (!path) return null;
+    // Already an external URL
+    if (path.startsWith("http://") || path.startsWith("https://")) return path;
+    // Vault-relative path — look up the file and get a fresh resource URL
+    const byPath = this.app.vault.getAbstractFileByPath(path) as TFile | null;
+    if (byPath) return this.app.vault.getResourcePath(byPath);
+    // Try short name resolution
+    const resolved = this.app.metadataCache.getFirstLinkpathDest(path, "");
+    if (resolved) return this.app.vault.getResourcePath(resolved);
+    // Old save with app:// URL — return as-is and hope for the best
+    if (path.startsWith("app://")) return path;
+    return null;
+  }
+
   loadImg(src: string): HTMLImageElement | null {
-    if (this.imgCache.has(src)) return this.imgCache.get(src)!;
-    if (this.imgLoading.has(src)) return null;
-    this.imgLoading.add(src);
+    // Resolve vault path to a current resource URL on every call
+    const url = this.resolveImageUrl(src) ?? src;
+    if (this.imgCache.has(url)) return this.imgCache.get(url)!;
+    if (this.imgLoading.has(url)) return null;
+    this.imgLoading.add(url);
     const img = new Image();
-    img.onload  = () => { this.imgCache.set(src, img); this.imgLoading.delete(src); this.dirty = true; };
-    img.onerror = () => { this.imgLoading.delete(src); console.warn("VTT: cannot load", src); };
-    img.src = src;
+    img.onload  = () => { this.imgCache.set(url, img); this.imgLoading.delete(url); this.dirty = true; };
+    img.onerror = () => { this.imgLoading.delete(url); console.warn("VTT: cannot load", src); };
+    img.src = url;
     return null;
   }
 
@@ -1448,16 +1579,27 @@ class VTTView extends ItemView {
     this.hpEditToken = null;
   }
 
+  rebuildBoardSel() {
+    if (!this.boardBtn) return;
+    const spans = this.boardBtn.querySelectorAll("span");
+    // second span is the label (first is the icon)
+    if (spans[1]) spans[1].textContent = this.S.name;
+  }
+
+  resetViewport() {
+    this.panX = 0; this.panY = 0; this.zoom = 1;
+  }
+
   pickBackground() {
     new ImageSuggestModal(this.app, file => {
-      const url = this.app.vault.getResourcePath(file);
-      this.board.backgroundImage = url;
+      // Store vault-relative path — resource URLs are session-specific and change on restart
+      this.board.backgroundImage = file.path;
       this.board.bgX     = 0;
       this.board.bgY     = 0;
       this.board.bgScale = 1;
-      this.imgCache.delete(url);
-      this.imgLoading.delete(url);
-      this.fitGridToImage(url).then(() => {
+      this.imgCache.clear(); // evict all cached images
+      this.imgLoading.clear();
+      this.fitGridToImage(file.path).then(() => {
         this.plugin.saveVTTSettings();
         this.dirty = true;
       });
@@ -1470,7 +1612,7 @@ class VTTView extends ItemView {
    * the full image exactly at the current cellSize.
    * Uses the cache if already loaded, otherwise loads fresh.
    */
-  fitGridToImage(url: string): Promise<void> {
+  fitGridToImage(path: string): Promise<void> {
     return new Promise(resolve => {
       const apply = (img: HTMLImageElement) => {
         const { cellSize } = this.board;
@@ -1480,19 +1622,14 @@ class VTTView extends ItemView {
         resolve();
       };
 
-      if (this.imgCache.has(url)) {
-        apply(this.imgCache.get(url)!);
-        return;
-      }
+      // Resolve vault path to a live resource URL
+      const url = this.resolveImageUrl(path) ?? path;
 
-      // Load independently of the render-loop cache so we get dimensions immediately
+      if (this.imgCache.has(url)) { apply(this.imgCache.get(url)!); return; }
+
       const img = new Image();
-      img.onload = () => {
-        this.imgCache.set(url, img);
-        this.imgLoading.delete(url);
-        apply(img);
-      };
-      img.onerror = () => { this.imgLoading.delete(url); resolve(); };
+      img.onload  = () => { this.imgCache.set(url, img); this.imgLoading.delete(url); apply(img); };
+      img.onerror = () => { this.imgLoading.delete(url); console.warn("VTT: fitGridToImage failed:", url); resolve(); };
       img.src = url;
     });
   }
@@ -1747,7 +1884,7 @@ class EncounterParser {
     // Parsed wikilink object
     if (typeof raw === "object" && raw !== null && "path" in raw) {
       const f = this.app.vault.getAbstractFileByPath((raw as {path:string}).path) as TFile | null;
-      return f ? this.app.vault.getResourcePath(f) : null;
+      return f ? f.path : null; // store vault path
     }
 
     let text = String(raw).trim();
@@ -1756,11 +1893,12 @@ class EncounterParser {
     if (pipe !== -1) text = text.slice(0, pipe).trim();
     if (!text) return null;
 
+    // Return vault path so it survives across sessions
     const resolved = this.app.metadataCache.getFirstLinkpathDest(text, file.path);
-    if (resolved) return this.app.vault.getResourcePath(resolved);
+    if (resolved) return resolved.path;
     const byPath = this.app.vault.getAbstractFileByPath(text) as TFile | null;
-    if (byPath) return this.app.vault.getResourcePath(byPath);
-    return text; // external URL
+    if (byPath) return byPath.path;
+    return text; // external URL — stored as-is
   }
 
   // ── Players ────────────────────────────────────────────────────────────────
@@ -2390,6 +2528,9 @@ class EncounterBuilderModal extends Modal {
   buildMarkdown(): string {
     const lines: string[] = ["---"];
 
+    // vtt-board links this note to a VTT board with the same name
+    lines.push(`vtt-board: "${this.noteName.trim() || "New Encounter"}"`);
+
     if (this.mapPath.trim()) {
       lines.push(`map: "${this.mapPath.trim()}"`);
     }
@@ -2437,6 +2578,11 @@ class EncounterBuilderModal extends Modal {
       lines.push("```");
     }
 
+    // Board button card — renders as a clickable "Open Board" card in reading view
+    lines.push("", "```vtt-board");
+    lines.push(this.noteName.trim() || "New Encounter");
+    lines.push("```");
+
     return lines.join("\n");
   }
 
@@ -2475,13 +2621,49 @@ class EncounterBuilderModal extends Modal {
   }
 }
 
+// ─── Rename Board Modal ───────────────────────────────────────────────────────
+
+class RenameBoardModal extends Modal {
+  constructor(app: App, private current: string, private onRename: (name: string) => void) {
+    super(app);
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h3", { text: "Rename Board" }).style.marginTop = "0";
+    const inp = contentEl.createEl("input");
+    inp.type = "text";
+    inp.value = this.current;
+    inp.style.cssText =
+      "width:100%;background:var(--background-modifier-form-field);" +
+      "border:1px solid var(--background-modifier-border);" +
+      "border-radius:var(--radius-s);color:var(--text-normal);padding:6px 8px;" +
+      "font-size:var(--font-ui-small);box-sizing:border-box;margin-bottom:12px;";
+    const row = contentEl.createDiv();
+    row.style.cssText = "display:flex;gap:8px;justify-content:flex-end;";
+    const ok = row.createEl("button", { text: "Rename" });
+    ok.addClass("mod-cta");
+    ok.onclick = () => {
+      const name = inp.value.trim();
+      if (name) { this.onRename(name); this.close(); }
+    };
+    const cancel = row.createEl("button", { text: "Cancel" });
+    cancel.onclick = () => this.close();
+    inp.onkeydown = e => { if (e.key === "Enter") ok.click(); if (e.key === "Escape") this.close(); };
+    setTimeout(() => { inp.focus(); inp.select(); }, 10);
+  }
+  onClose() { this.contentEl.empty(); }
+}
+
 // ─── Settings tab ─────────────────────────────────────────────────────────────
 
 class VTTSettingTab extends PluginSettingTab {
   constructor(app: App, private plugin: VTTPlugin) { super(app, plugin); }
   display() {
     const { containerEl, plugin } = this;
-    const { board } = plugin.vttSettings;
+    // Use the active board's settings as defaults
+    const activeBoard = plugin.vttSettings.boards[plugin.vttSettings.activeBoardIndex]
+                     ?? plugin.vttSettings.boards[0];
+    const { board } = activeBoard;
     containerEl.empty();
     containerEl.createEl("h2", { text: "VTT Board" });
 
@@ -2531,10 +2713,278 @@ export default class VTTPlugin extends Plugin {
     await this.loadVTTSettings();
     this.registerView(VTT_VIEW_TYPE, leaf => new VTTView(leaf, this));
     this.addRibbonIcon("layout-grid", "Open VTT Board", () => this.activateView());
-    this.addCommand({ id: "open-vtt-board",       name: "Open VTT Board",                callback: () => this.activateView() });
-    this.addCommand({ id: "load-encounter-note",    name: "VTT: Load encounter from active note",  callback: () => this.loadEncounterFromActiveNote() });
-    this.addCommand({ id: "open-encounter-builder", name: "VTT: Open encounter builder",           callback: () => new EncounterBuilderModal(this.app, this).open() });
+    this.addCommand({ id: "open-vtt-board",        name: "Open VTT Board",                       callback: () => this.activateView() });
+    this.addCommand({ id: "load-encounter-note",   name: "VTT: Load encounter from active note", callback: () => this.loadEncounterFromActiveNote() });
+    this.addCommand({ id: "open-encounter-builder",name: "VTT: Open encounter builder",          callback: () => new EncounterBuilderModal(this.app, this).open() });
+    this.addCommand({ id: "open-board-for-note",   name: "VTT: Open board linked in this note",  callback: () => this.openBoardForActiveNote() });
     this.addSettingTab(new VTTSettingTab(this.app, this));
+
+    // ── Protocol handler: obsidian://vtt?board=Board+Name ─────────────────
+    this.registerObsidianProtocolHandler("vtt", (params) => {
+      const name = params.board ?? params.name;
+      if (name) this.openBoardByName(decodeURIComponent(name));
+      else this.activateView();
+    });
+
+
+    // ── Markdown post-processor: VTT links → open buttons ─────────────────
+    //
+    // Handles two syntaxes:
+    //   [[VTT:Board Name]]   — wikilink (Obsidian renders as unresolved internal-link)
+    //   `VTT:Board Name`     — inline code (reliable, always rendered verbatim)
+    //
+    // The wikilink form is caught by checking data-href on <a> elements.
+    // The inline-code form is caught by matching <code> text content.
+    this.registerMarkdownPostProcessor((el, ctx) => {
+      // Resolve the source file once for all buttons in this block
+      const sourceFile = ctx.sourcePath
+        ? this.app.vault.getAbstractFileByPath(ctx.sourcePath) as TFile | null
+        : null;
+
+      // ── Wikilink form: [[VTT:Board Name]] ──────────────────────────────
+      el.querySelectorAll("a.internal-link").forEach(a => {
+        const dataHref = a.getAttribute("data-href") ?? a.getAttribute("href") ?? "";
+        const match = dataHref.match(/^VTT:\s*(.+)$/i);
+        if (!match) return;
+        a.replaceWith(this.makeBoardButton(match[1].trim(), sourceFile ?? undefined));
+      });
+
+      // ── Inline code form: `VTT:Board Name` ───────────────────────────
+      el.querySelectorAll("code").forEach(code => {
+        const match = (code.textContent ?? "").match(/^VTT:\s*(.+)$/i);
+        if (!match) return;
+        code.replaceWith(this.makeBoardButton(match[1].trim(), sourceFile ?? undefined));
+      });
+    });
+
+    // ── Code block: ```vtt-board\nBoard Name\n``` → card button ──────────
+    this.registerMarkdownCodeBlockProcessor("vtt-board", (source, el, ctx) => {
+      const boardName  = source.trim();
+      if (!boardName) return;
+      const sourceFile = ctx.sourcePath
+        ? this.app.vault.getAbstractFileByPath(ctx.sourcePath) as TFile | null
+        : null;
+
+      const card = el.createDiv();
+      card.style.cssText =
+        "display:flex;align-items:center;justify-content:space-between;" +
+        "background:var(--background-secondary);border:1px solid var(--background-modifier-border);" +
+        "border-radius:var(--radius-l);padding:12px 16px;margin:4px 0;gap:12px;";
+
+      const left = card.createDiv();
+      left.style.cssText = "display:flex;align-items:center;gap:10px;min-width:0;";
+      const iconWrap = left.createDiv();
+      iconWrap.style.cssText =
+        "display:flex;align-items:center;justify-content:center;" +
+        "width:32px;height:32px;border-radius:var(--radius-m);" +
+        "background:var(--interactive-accent);color:var(--text-on-accent);flex-shrink:0;";
+      setIcon(iconWrap, "layout-grid");
+
+      const textWrap = left.createDiv();
+      textWrap.style.cssText = "display:flex;flex-direction:column;gap:2px;min-width:0;";
+      const nameEl = textWrap.createDiv({ text: boardName });
+      nameEl.style.cssText =
+        "font-weight:600;color:var(--text-normal);font-size:var(--font-ui-medium);" +
+        "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+
+      // Show board status: exists? how many tokens?
+      const existing = this.vttSettings.boards.find(b => b.name === boardName);
+      const subEl = textWrap.createDiv();
+      subEl.style.cssText = "font-size:var(--font-ui-smaller);color:var(--text-muted);";
+      if (existing) {
+        const t = existing.tokens.length;
+        subEl.textContent = `${t} token${t !== 1 ? "s" : ""} · VTT Board`;
+      } else {
+        subEl.textContent = "New board — will be created on open";
+      }
+
+      const btn = card.createEl("button");
+      btn.style.cssText =
+        "display:inline-flex;align-items:center;gap:6px;flex-shrink:0;" +
+        "background:var(--interactive-accent);color:var(--text-on-accent);" +
+        "border:none;border-radius:var(--radius-m);padding:6px 14px;" +
+        "cursor:pointer;font-size:var(--font-ui-small);font-family:inherit;" +
+        "white-space:nowrap;";
+      const btnIcon = btn.createSpan();
+      setIcon(btnIcon, "external-link");
+      btnIcon.style.cssText = "display:flex;align-items:center;";
+      btn.createSpan({ text: "Open Board" });
+      btn.onclick = () => this.openBoardByName(boardName, sourceFile ?? undefined);
+    });
+
+    // ── File open: inject board button if note has vtt-board frontmatter ──
+    this.registerEvent(this.app.workspace.on("file-open", (file) => {
+      if (!file) return;
+      // Debounce slightly so the view has rendered
+      setTimeout(() => this.injectFrontmatterButton(file), 80);
+    }));
+  }
+
+  /** Create a small inline button that opens a named board. */
+  private makeBoardButton(boardName: string, sourceFile?: TFile): HTMLElement {
+    const btn = createEl("button");
+    btn.addClass("vtt-board-link");
+    btn.style.cssText =
+      "display:inline-flex;align-items:center;gap:5px;" +
+      "background:var(--interactive-accent);color:var(--text-on-accent);" +
+      "border:none;border-radius:var(--radius-m);padding:2px 10px 2px 7px;" +
+      "cursor:pointer;font-size:var(--font-ui-small);font-family:inherit;" +
+      "vertical-align:middle;";
+    const iconEl = btn.createSpan();
+    setIcon(iconEl, "layout-grid");
+    iconEl.style.cssText = "display:flex;align-items:center;";
+    btn.createSpan({ text: boardName });
+    btn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); this.openBoardByName(boardName, sourceFile); };
+    return btn;
+  }
+
+  /** Load the initiative tracker for the named board by finding its encounter note. */
+  async loadITForBoard(boardName: string) {
+    const encounterFile = await this.resolveEncounterFile(boardName);
+    if (!encounterFile) return; // no encounter note found — leave IT as-is
+    const parser  = new EncounterParser(this.app);
+    const parsed  = await parser.parse(encounterFile);
+    await this.loadMonstersIntoTracker(parsed.creatures);
+  }
+
+  /**
+   * Open VTT and switch to the named board.
+   *
+   * Decision tree:
+   * 1. Board exists → switch to it, done.
+   * 2. Board missing + we have a source file:
+   *    a. Source file is an encounter note (has an encounter block) → load from it.
+   *    b. Source file is NOT an encounter note (e.g. a hub page) →
+   *       search the vault for a note whose basename or vtt-board property matches.
+   * 3. Board missing + no source file → search vault by name.
+   * 4. Nothing found → create an empty board.
+   */
+  async openBoardByName(name: string, sourceFile?: TFile) {
+    const idx = this.vttSettings.boards.findIndex(b => b.name === name);
+
+    if (idx !== -1) {
+      // Board exists — switch to it
+      this.vttSettings.activeBoardIndex = idx;
+      await this.saveVTTSettings();
+      await this.activateView();
+      const view = this.app.workspace.getLeavesOfType(VTT_VIEW_TYPE)[0]?.view as VTTView | undefined;
+      if (view) { view.rebuildBoardSel(); view.dirty = true; }
+
+      // Also reload the initiative tracker for this encounter
+      await this.loadITForBoard(name);
+      return;
+    }
+
+    // Board does not exist — find the encounter note to load from
+    const encounterFile = await this.resolveEncounterFile(name, sourceFile);
+
+    if (encounterFile) {
+      new Notice(`Loading encounter "${name}"...`);
+      await this.loadEncounterFromActiveNoteFile(encounterFile);
+    } else {
+      // Truly nothing found — create empty board
+      this.vttSettings.boards.push(makeBoard(name));
+      this.vttSettings.activeBoardIndex = this.vttSettings.boards.length - 1;
+      await this.saveVTTSettings();
+      await this.activateView();
+      const view = this.app.workspace.getLeavesOfType(VTT_VIEW_TYPE)[0]?.view as VTTView | undefined;
+      if (view) { view.rebuildBoardSel(); view.dirty = true; }
+      new Notice(`Created new board "${name}"`);
+    }
+  }
+
+  /**
+   * Find the best encounter note for a given board name.
+   * Checks in order:
+   *   1. sourceFile itself, if it contains an ```encounter``` block
+   *   2. Any vault note whose basename exactly matches name
+   *   3. Any vault note whose vtt-board frontmatter matches name
+   */
+  private async resolveEncounterFile(name: string, sourceFile?: TFile): Promise<TFile | null> {
+    const isEncounterNote = async (file: TFile): Promise<boolean> => {
+      try {
+        const content = await this.app.vault.cachedRead(file);
+        return content.includes("```encounter");
+      } catch { return false; }
+    };
+
+    // 1. Source file itself
+    if (sourceFile && await isEncounterNote(sourceFile)) return sourceFile;
+
+    // 2. Exact basename match anywhere in the vault
+    const byBasename = this.app.vault.getMarkdownFiles()
+      .find(f => f.basename === name);
+    if (byBasename) return byBasename;
+
+    // 3. vtt-board frontmatter match
+    const byFrontmatter = this.app.vault.getMarkdownFiles().find(f => {
+      const fm = this.app.metadataCache.getFileCache(f)?.frontmatter ?? {};
+      const boardProp = fm["vtt-board"] ?? fm["vttBoard"] ?? fm["vtt_board"];
+      return boardProp && String(boardProp).trim() === name;
+    });
+    if (byFrontmatter) return byFrontmatter;
+
+    return null;
+  }
+
+  /** Open the board linked in the active note's vtt-board frontmatter. */
+  async openBoardForActiveNote() {
+    const file = this.app.workspace.getActiveFile();
+    if (!file) { new Notice("No active note."); return; }
+    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
+    const name = fm["vtt-board"] ?? fm["vttBoard"] ?? fm["vtt_board"];
+    if (!name) { new Notice("No vtt-board property found in this note."); return; }
+    await this.openBoardByName(String(name).trim(), file);
+  }
+
+  /**
+   * If the currently open note has a `vtt-board` frontmatter key, inject
+   * a small "Open Board" button into the rendered view's properties area.
+   * We look for an existing injected button and replace it to avoid dupes.
+   */
+  private async injectFrontmatterButton(file: TFile) {
+    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter ?? {};
+    const name = fm["vtt-board"] ?? fm["vttBoard"] ?? fm["vtt_board"];
+
+    // Remove any previously injected button
+    document.querySelectorAll(".vtt-fm-button").forEach(el => el.remove());
+
+    if (!name) return;
+    const boardName = String(name).trim();
+
+    // Find the active markdown leaf's container
+    const leaves = this.app.workspace.getLeavesOfType("markdown");
+    for (const leaf of leaves) {
+      const view = leaf.view as any;
+      if (view?.file?.path !== file.path) continue;
+      const container = view.contentEl as HTMLElement | undefined;
+      if (!container) continue;
+
+      // Try to find the properties/frontmatter block to attach near
+      const propertiesEl = container.querySelector(".metadata-container, .frontmatter, .cm-frontmatter");
+      const targetEl     = propertiesEl ?? container.querySelector(".markdown-preview-section, .cm-content");
+      if (!targetEl) continue;
+
+      const wrap = createEl("div");
+      wrap.addClass("vtt-fm-button");
+      wrap.style.cssText =
+        "display:flex;align-items:center;padding:6px 0 2px;";
+
+      const btn = wrap.createEl("button");
+      btn.style.cssText =
+        "display:inline-flex;align-items:center;gap:6px;" +
+        "background:var(--interactive-accent);color:var(--text-on-accent);" +
+        "border:none;border-radius:var(--radius-m);padding:4px 12px 4px 8px;" +
+        "cursor:pointer;font-size:var(--font-ui-small);font-family:inherit;";
+      const iconEl = btn.createSpan();
+      setIcon(iconEl, "layout-grid");
+      iconEl.style.cssText = "display:flex;align-items:center;";
+      btn.createSpan({ text: `Open board: ${boardName}` });
+      btn.onclick = () => this.openBoardByName(boardName, file);
+
+      targetEl.insertAdjacentElement("afterend", wrap);
+      break;
+    }
   }
 
   // ── Encounter loading ─────────────────────────────────────────────────────
@@ -2542,20 +2992,35 @@ export default class VTTPlugin extends Plugin {
   async loadEncounterFromActiveNote() {
     const file = this.app.workspace.getActiveFile();
     if (!file) { new Notice("No active note."); return; }
+    await this.loadEncounterFromActiveNoteFile(file);
+  }
 
-    const parser  = new EncounterParser(this.app);
-    const parsed  = await parser.parse(file);
+  async loadEncounterFromActiveNoteFile(file: TFile) {
+    const parser   = new EncounterParser(this.app);
+    const parsed   = await parser.parse(file);
 
-    // Reset board and tokens — keep grid settings
-    this.vttSettings.tokens = [];
-    this.vttSettings.board.backgroundImage = null;
-    this.vttSettings.board.bgX = 0;
-    this.vttSettings.board.bgY = 0;
-    this.vttSettings.board.bgScale = 1;
+    // Find or create a board slot named after this encounter note.
+    // This way loading the same note twice reuses the same board,
+    // and different encounters each get their own slot.
+    const encounterName = file.basename;
+    let boardIndex = this.vttSettings.boards.findIndex(b => b.name === encounterName);
+    if (boardIndex === -1) {
+      this.vttSettings.boards.push(makeBoard(encounterName));
+      boardIndex = this.vttSettings.boards.length - 1;
+    }
+    this.vttSettings.activeBoardIndex = boardIndex;
+    const boardState = this.vttSettings.boards[boardIndex];
+
+    // Reset this board's tokens and background
+    boardState.tokens = [];
+    boardState.board.backgroundImage = null;
+    boardState.board.bgX = 0;
+    boardState.board.bgY = 0;
+    boardState.board.bgScale = 1;
 
     // Set background map
     if (parsed.mapUrl) {
-      this.vttSettings.board.backgroundImage = parsed.mapUrl;
+      boardState.board.backgroundImage = parsed.mapUrl;
     }
 
     const tokens: Token[] = [];
@@ -2597,18 +3062,21 @@ export default class VTTPlugin extends Plugin {
       }
     }
 
-    this.vttSettings.tokens = tokens;
+    boardState.tokens = tokens;
     await this.saveVTTSettings();
 
     // Open / refresh the board view
     await this.activateView();
     const view = this.app.workspace.getLeavesOfType(VTT_VIEW_TYPE)[0]?.view as VTTView | undefined;
-    if (view) view.onEncounterLoaded();
+    if (view) {
+      view.rebuildBoardSel();
+      view.onEncounterLoaded();
+    }
 
     // Load monsters into the initiative tracker (players are auto-managed by IT)
     await this.loadMonstersIntoTracker(parsed.creatures);
 
-    new Notice(`Loaded encounter from "${file.basename}": ${tokens.length} token(s)`);
+    new Notice(`Loaded "${file.basename}" onto board "${encounterName}": ${tokens.length} token(s)`);
   }
 
   /**
@@ -2769,9 +3237,30 @@ export default class VTTPlugin extends Plugin {
 
   async loadVTTSettings() {
     const saved = (await this.loadData()) ?? {};
+
+    // Migration: old format had { board, tokens } at top level
+    if (saved.board !== undefined || saved.tokens !== undefined) {
+      this.vttSettings = {
+        boards: [{
+          name:   "Board 1",
+          board:  Object.assign({}, DEFAULT_BOARD, saved.board ?? {}),
+          tokens: Array.isArray(saved.tokens) ? saved.tokens : [],
+        }],
+        activeBoardIndex: 0,
+      };
+      return;
+    }
+
+    // New format
     this.vttSettings = {
-      board:  Object.assign({}, DEFAULT_BOARD, saved.board ?? {}),
-      tokens: Array.isArray(saved.tokens) ? saved.tokens : [],
+      boards: Array.isArray(saved.boards) && saved.boards.length > 0
+        ? saved.boards.map((b: any) => ({
+            name:   b.name ?? "Board",
+            board:  Object.assign({}, DEFAULT_BOARD, b.board ?? {}),
+            tokens: Array.isArray(b.tokens) ? b.tokens : [],
+          }))
+        : [makeBoard("Board 1")],
+      activeBoardIndex: typeof saved.activeBoardIndex === "number" ? saved.activeBoardIndex : 0,
     };
   }
 
