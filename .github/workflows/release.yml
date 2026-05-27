@@ -1,0 +1,58 @@
+name: Release
+
+# On every merge to main, publish a GitHub release for the version in
+# manifest.json — but only if that version hasn't been released yet, so
+# ordinary pushes that don't bump the version are no-ops. This mirrors the
+# existing releases: a plain version tag (e.g. "1.0.2") targeting main with
+# main.js and manifest.json attached as assets.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build plugin bundle
+        run: node esbuild.config.mjs production
+
+      - name: Read version from manifest
+        id: manifest
+        run: echo "version=$(node -p "require('./manifest.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether this version is already released
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ steps.manifest.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.manifest.outputs.version }}" \
+            main.js manifest.json \
+            --target "${{ github.sha }}" \
+            --title "${{ steps.manifest.outputs.version }}" \
+            --generate-notes
