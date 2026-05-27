@@ -1,11 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { App } from "obsidian";
-import {
-  resolveAC,
-  makeBoard,
-  nextColor,
-  EncounterParser,
-} from "../main.ts";
+import { resolveAC, makeBoard, nextColor } from "../src/core";
+import { EncounterParser } from "../src/encounter-parser";
 
 // EncounterParser's block-parsing methods are pure (they never touch `this.app`),
 // so a bare mock App is enough to exercise them via the private API.
