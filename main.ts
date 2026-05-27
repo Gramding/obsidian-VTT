@@ -84,7 +84,7 @@ const DEFAULT_BOARD: BoardSettings = {
   gridOpacity: 0.3,
 };
 
-function makeBoard(name: string): BoardState {
+export function makeBoard(name: string): BoardState {
   return { name, board: { ...DEFAULT_BOARD }, tokens: [] };
 }
 
@@ -100,7 +100,7 @@ const TOKEN_COLORS = [
   "#1abc9c", "#3498db", "#9b59b6", "#e91e63",
 ];
 let colorCursor = 0;
-const nextColor = () => TOKEN_COLORS[colorCursor++ % TOKEN_COLORS.length];
+export const nextColor = () => TOKEN_COLORS[colorCursor++ % TOKEN_COLORS.length];
 
 // ─── Modals ───────────────────────────────────────────────────────────────────
 
@@ -1861,7 +1861,7 @@ interface ParsedEncounter {
   creatures: EncounterCreature[];
 }
 
-class EncounterParser {
+export class EncounterParser {
   constructor(private app: App) {}
 
   async parse(file: TFile): Promise<ParsedEncounter> {
@@ -2120,7 +2120,7 @@ interface BestiaryMonster {
 }
 
 /** Extract a plain AC number from the ac field which can be int or [{ac:N,...}] */
-function resolveAC(ac: BestiaryMonster["ac"]): number | null {
+export function resolveAC(ac: BestiaryMonster["ac"]): number | null {
   if (!ac) return null;
   if (typeof ac === "number") return ac;
   if (Array.isArray(ac) && ac.length > 0) {
