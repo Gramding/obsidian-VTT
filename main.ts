@@ -1586,6 +1586,11 @@ class VTTView extends ItemView {
     if (spans[1]) spans[1].textContent = this.S.name;
   }
 
+  /** Request a re-render on the next animation frame. */
+  markDirty() {
+    this.dirty = true;
+  }
+
   resetViewport() {
     this.panX = 0; this.panY = 0; this.zoom = 1;
   }
@@ -2868,7 +2873,7 @@ export default class VTTPlugin extends Plugin {
       await this.saveVTTSettings();
       await this.activateView();
       const view = this.app.workspace.getLeavesOfType(VTT_VIEW_TYPE)[0]?.view as VTTView | undefined;
-      if (view) { view.rebuildBoardSel(); view.dirty = true; }
+      if (view) { view.rebuildBoardSel(); view.markDirty(); }
 
       // Also reload the initiative tracker for this encounter
       await this.loadITForBoard(name);
@@ -2888,7 +2893,7 @@ export default class VTTPlugin extends Plugin {
       await this.saveVTTSettings();
       await this.activateView();
       const view = this.app.workspace.getLeavesOfType(VTT_VIEW_TYPE)[0]?.view as VTTView | undefined;
-      if (view) { view.rebuildBoardSel(); view.dirty = true; }
+      if (view) { view.rebuildBoardSel(); view.markDirty(); }
       new Notice(`Created new board "${name}"`);
     }
   }
