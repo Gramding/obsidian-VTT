@@ -1,7 +1,7 @@
 {
   "id": "obsidian-vtt",
   "name": "VTT Board",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "minAppVersion": "0.15.0",
   "description": "A Virtual Tabletop board for Obsidian. Place character and monster tokens (linked to vault notes) onto a grid map with square or hex layouts. Integrates with Initiative Tracker and Fantasy Statblocks.",
   "author": "You",
